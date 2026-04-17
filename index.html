@@ -4,9 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     
-    <title>Kjanis Cleaning | Elite CRM & Service Hannover</title>
-    <meta name="description" content="Kjanis Cleaning Hannover: Exklusive Reinigung & Senioren-Alltagshilfe. Zertifiziert, sicher, diskret.">
+    <title>Kjanis Cleaning | Elite CRM & Lead-Autopilot Hannover</title>
+    <meta name="description" content="Kjanis Cleaning Hannover: Exklusive Reinigung & Senioren-Alltagshilfe. Zertifiziert nach § 34a GewO.">
     
+    <!-- Firebase Engine - Elite Build 51.0 (Stability Update) -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
@@ -14,6 +15,13 @@
 
         const initSystem = async () => {
             try {
+                // Sicherheits-Check für die Konfiguration
+                if (typeof __firebase_config === 'undefined') {
+                    console.error("Firebase Config fehlt!");
+                    hideLoader();
+                    return;
+                }
+
                 const firebaseConfig = JSON.parse(__firebase_config);
                 const app = initializeApp(firebaseConfig);
                 const auth = getAuth(app);
@@ -58,29 +66,45 @@
 
         const startSync = (uid) => {
             const { kj_db, kj_appId, kj_fs } = window;
+            
+            // Sync Manuelle Leads
             kj_fs.onSnapshot(kj_fs.collection(kj_db, 'artifacts', kj_appId, 'users', uid, 'leads'), (snap) => {
-                const data = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.timestamp - a.timestamp);
-                window.rawLeads = data;
-                if(window.renderLeads) window.renderLeads(data);
-                cleanOldLeads(uid, data);
-            });
+                window.manualLeads = snap.docs.map(d => ({ id: d.id, source: 'manual', ...d.data() }));
+                mergeAndRender();
+            }, (err) => console.error("Leads Sync Error", err));
+
+            // Sync Website Anfragen
+            kj_fs.onSnapshot(kj_fs.collection(kj_db, 'artifacts', kj_appId, 'public', 'data', 'web_leads'), (snap) => {
+                window.webLeads = snap.docs.map(d => ({ id: d.id, source: 'website', ...d.data() }));
+                mergeAndRender();
+            }, (err) => console.error("WebLeads Sync Error", err));
+
+            // Sync Bewertungen
             kj_fs.onSnapshot(kj_fs.collection(kj_db, 'artifacts', kj_appId, 'public', 'data', 'reviews'), (snap) => {
                 const data = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.timestamp - a.timestamp);
                 if(window.updateReviewsUI) window.updateReviewsUI(data);
                 hideLoader();
-            });
-            setTimeout(hideLoader, 1000);
+            }, (err) => { console.error("Reviews Sync Error", err); hideLoader(); });
+            
+            setTimeout(hideLoader, 1500);
         };
 
-        // Automatische Bereinigung nach 3 Monaten (90 Tage)
-        const cleanOldLeads = async (uid, leads) => {
+        const mergeAndRender = () => {
+            const all = [...(window.manualLeads || []), ...(window.webLeads || [])].sort((a,b) => b.timestamp - a.timestamp);
+            window.rawLeads = all;
+            if(window.renderLeads) window.renderLeads(all);
+            
+            // 90 Tage Auto-Löschung
             const now = Date.now();
             const ninetyDays = 90 * 24 * 60 * 60 * 1000;
-            for (const lead of leads) {
-                if (lead.status === 'blocked' && (now - lead.lastContact) > ninetyDays) {
-                    await window.kj_fs.deleteDoc(window.kj_fs.doc(window.kj_db, 'artifacts', window.kj_appId, 'users', uid, 'leads', lead.id));
+            all.forEach(async lead => {
+                if(lead.status === 'blocked' && (now - lead.lastContact) > ninetyDays) {
+                    const path = lead.source === 'manual' ? 
+                        ['artifacts', window.kj_appId, 'users', window.kj_auth.currentUser.uid, 'leads', lead.id] :
+                        ['artifacts', window.kj_appId, 'public', 'data', 'web_leads', lead.id];
+                    await window.kj_fs.deleteDoc(window.kj_fs.doc(window.kj_db, ...path));
                 }
-            }
+            });
         };
 
         window.addEventListener('DOMContentLoaded', initSystem);
@@ -102,22 +126,28 @@
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;700;800&family=Playfair+Display:wght@700;900&display=swap');
         body { font-family: 'Plus Jakarta Sans', sans-serif; transition: background-color 0.4s; overflow-x: hidden; }
         .font-serif { font-family: 'Playfair Display', serif; }
-        .card-elite { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        
+        .card-elite { background-color: #ffffff; border: 4px solid #0f172a; color: #000000; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
         .dark .card-elite { background-color: #000000; border: 4px solid #d4af37; color: #ffffff; }
-        html:not(.dark) .card-elite { background-color: #ffffff; border: 4px solid #0f172a; color: #000000; }
-        .dark .nav-bg { background-color: rgba(0,0,0,0.98); border-bottom: 3px solid #d4af37; }
-        html:not(.dark) .nav-bg { background-color: rgba(255,255,255,0.98); border-bottom: 3px solid #0f172a; }
-        #admin-panel, #lock-screen, #review-modal, #finance-view { display: none; }
+        
+        .dark .nav-bg { background-color: rgba(0,0,0,0.95); border-bottom: 3px solid #d4af37; }
+        html:not(.dark) .nav-bg { background-color: rgba(255,255,255,0.95); border-bottom: 3px solid #0f172a; }
+        
+        #admin-panel, #lock-screen, #review-modal, #anfrage-modal { display: none; }
         .custom-scroll::-webkit-scrollbar { width: 6px; }
         .custom-scroll::-webkit-scrollbar-thumb { background: #d4af37; border-radius: 10px; }
+        
+        .card-title { word-wrap: break-word; overflow-wrap: break-word; hyphens: auto; }
+        .text-glow { text-shadow: 0 0 20px rgba(212, 175, 55, 0.5); }
     </style>
 </head>
 <body class="bg-white text-black dark:bg-black dark:text-white transition-colors duration-300">
 
+    <!-- Ladebildschirm -->
     <div id="loading-overlay" class="fixed inset-0 z-[3000] bg-black flex items-center justify-center transition-opacity duration-500">
         <div class="text-center">
             <div class="w-20 h-20 border-4 border-gold border-t-transparent rounded-full animate-spin mb-4 mx-auto"></div>
-            <p class="text-gold font-black uppercase tracking-widest text-sm italic">Elite System Online...</p>
+            <p class="text-gold font-black uppercase tracking-widest text-sm italic italic">Kjanis Cleaning - Elite Stability 51.0</p>
         </div>
     </div>
 
@@ -134,7 +164,7 @@
                 </div>
                 <div class="flex items-center space-x-4">
                     <button onclick="window.toggleLighting()" class="w-14 h-14 flex items-center justify-center rounded-full bg-gold/10 border-2 border-gold text-gold text-3xl shadow-lg" id="lightSwitch">🌙</button>
-                    <a href="#kontakt" class="px-10 py-4 bg-gold text-navy font-black rounded-full text-sm shadow-xl hover:scale-105 transition-all">ANFRAGE</a>
+                    <button onclick="window.openAnfrageModal()" class="px-10 py-4 bg-gold text-navy font-black rounded-full text-sm shadow-xl hover:scale-105 active:scale-95 transition-all">ANFRAGE</button>
                 </div>
             </div>
         </nav>
@@ -142,11 +172,11 @@
         <!-- Hero -->
         <section class="relative min-h-screen flex items-center justify-center px-6 text-center pt-24 overflow-hidden text-white">
             <div class="absolute inset-0 z-[-1] bg-black">
-                <img src="https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&q=80&w=2400" class="w-full h-full object-cover opacity-40" alt="[Elite Reinigung Hannover]">
+                <img src="https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&q=80&w=2400" class="w-full h-full object-cover opacity-50" alt="[Elite Reinigung Hannover]">
             </div>
             <div class="max-w-5xl mx-auto">
                 <div class="inline-flex items-center px-6 py-2 rounded-full bg-gold text-navy font-black uppercase tracking-widest mb-10 text-[12px] border-2 border-gold/30">
-                    § 34a GewO | DB Sicherheit Erfahrung
+                    § 34a GewO Zertifiziert | Höchste Diskretion
                 </div>
                 <h1 class="font-serif text-6xl md:text-9xl lg:text-[11rem] leading-[0.85] mb-10 tracking-tighter drop-shadow-2xl">
                     Glanz <br> <span class="text-gold italic">ohne Ende.</span>
@@ -155,38 +185,38 @@
                     Exklusive Reinigung & Senioren-Alltagshilfe in Hannover.
                 </p>
                 <div class="flex flex-col sm:flex-row justify-center gap-6">
-                    <a href="#kontakt" class="px-14 py-6 bg-gold text-navy rounded-full font-black uppercase text-sm shadow-2xl hover:scale-110 transition-all">TERMIN BUCHEN</a>
+                    <button onclick="window.scrollToContact()" class="px-14 py-6 bg-gold text-navy rounded-full font-black uppercase text-sm shadow-2xl hover:scale-110 transition-all">TERMIN BUCHEN</button>
                     <button onclick="window.openReviewModal()" class="px-14 py-6 bg-white/10 backdrop-blur-md text-white rounded-full font-black uppercase text-sm border-2 border-white/30 hover:bg-gold hover:text-navy transition-all">REFERENZEN</button>
                 </div>
             </div>
         </section>
 
-        <!-- Portfolio (Fix für das "S") -->
+        <!-- Leistungen (Fix für iPad Boxen) -->
         <section id="leistungen" class="py-32 px-6 bg-white dark:bg-black transition-colors">
             <div class="max-w-7xl mx-auto">
                 <div class="text-center mb-24">
                     <h2 class="text-gold font-black uppercase tracking-widest text-sm mb-4">Elite Portfolio</h2>
-                    <p class="text-4xl md:text-7xl font-serif text-main italic">Service auf Höchstniveau.</p>
+                    <p class="text-4xl md:text-7xl font-serif dark:text-white text-black italic">Präzision in jedem Bereich.</p>
                 </div>
-                <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-10">
-                    <div class="card-elite p-10 rounded-[4rem] shadow-xl flex flex-col items-center text-center">
-                        <div class="text-6xl mb-6">🏢</div>
-                        <h3 class="text-xl md:text-2xl font-black mb-4 uppercase tracking-tighter leading-tight break-words w-full">Büroreinigung</h3>
+                <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-12">
+                    <div class="card-elite p-12 rounded-[4.5rem] shadow-xl flex flex-col items-center text-center hover:scale-105">
+                        <div class="text-7xl mb-8">🏢</div>
+                        <h3 class="card-title text-2xl md:text-3xl font-black mb-6 uppercase tracking-tighter leading-tight w-full break-words">Büroreinigung</h3>
                         <p class="opacity-80 font-bold italic text-sm mt-auto">Unterhaltsreinigung nach Elite-Standards.</p>
                     </div>
-                    <div class="card-elite p-10 rounded-[4rem] shadow-xl flex flex-col items-center text-center">
-                        <div class="text-6xl mb-6">🪜</div>
-                        <h3 class="text-xl md:text-2xl font-black mb-4 uppercase tracking-tighter leading-tight break-words w-full">Treppenhaus</h3>
+                    <div class="card-elite p-12 rounded-[4.5rem] shadow-xl flex flex-col items-center text-center hover:scale-105">
+                        <div class="text-7xl mb-8">🪜</div>
+                        <h3 class="card-title text-2xl md:text-3xl font-black mb-6 uppercase tracking-tighter leading-tight w-full break-words">Treppenhaus</h3>
                         <p class="opacity-80 font-bold italic text-sm mt-auto">Werterhalt durch absolute Sauberkeit.</p>
                     </div>
-                    <div class="card-elite p-10 rounded-[4rem] shadow-xl flex flex-col items-center text-center">
-                        <div class="text-6xl mb-6">🩺</div>
-                        <h3 class="text-xl md:text-2xl font-black mb-4 uppercase tracking-tighter leading-tight break-words w-full">Praxisreinigung</h3>
+                    <div class="card-elite p-12 rounded-[4.5rem] shadow-xl flex flex-col items-center text-center hover:scale-105">
+                        <div class="text-7xl mb-8">🩺</div>
+                        <h3 class="card-title text-2xl md:text-3xl font-black mb-6 uppercase tracking-tighter leading-tight w-full break-words">Praxisreinigung</h3>
                         <p class="opacity-80 font-bold italic text-sm mt-auto">Hygiene-Exzellenz für Ihre Patienten.</p>
                     </div>
-                    <div class="card-elite p-10 rounded-[4rem] shadow-xl flex flex-col items-center text-center">
-                        <div class="text-6xl mb-6">🪟</div>
-                        <h3 class="text-xl md:text-2xl font-black mb-4 uppercase tracking-tighter leading-tight break-words w-full">Glasreinigung</h3>
+                    <div class="card-elite p-12 rounded-[4.5rem] shadow-xl flex flex-col items-center text-center hover:scale-105">
+                        <div class="text-7xl mb-8">🪟</div>
+                        <h3 class="card-title text-2xl md:text-3xl font-black mb-6 uppercase tracking-tighter leading-tight w-full break-words">Glasreinigung</h3>
                         <p class="opacity-80 font-bold italic text-sm mt-auto">Glasklarer Durchblick für Ihre Fenster.</p>
                     </div>
                 </div>
@@ -198,44 +228,45 @@
             <div class="max-w-7xl mx-auto relative z-10 text-center lg:text-left">
                 <div class="grid lg:grid-cols-2 gap-20 items-center">
                     <div>
-                        <div class="inline-block bg-gold text-navy px-6 py-2 rounded-full font-black text-xs uppercase mb-8 shadow-xl tracking-widest italic">Alltagshilfe für Senioren</div>
-                        <h2 class="text-5xl md:text-8xl font-serif italic mb-10 text-gold leading-tight">Wir helfen Ihnen.</h2>
-                        <ul class="space-y-8 text-2xl md:text-3xl font-black italic">
+                        <div class="inline-block bg-gold text-navy px-6 py-2 rounded-full font-black text-xs uppercase mb-8 shadow-xl tracking-widest italic italic">Spezial-Service Hannover</div>
+                        <h2 class="text-5xl md:text-8xl font-serif italic mb-10 text-gold leading-tight">Sicher & entspannt wohnen.</h2>
+                        <ul class="space-y-8 text-2xl md:text-3xl font-black italic italic">
                             <li class="flex items-center space-x-6"><span class="text-gold text-4xl">✓</span> <span>Einkaufsservice & Erledigungen</span></li>
-                            <li class="flex items-center space-x-6"><span class="text-gold text-4xl">✓</span> <span>Fahrten zu Terminen & Einkäufen</span></li>
+                            <li class="flex items-center space-x-6"><span class="text-gold text-4xl">✓</span> <span>Fahrten zu Terminen & Möbelhäusern</span></li>
                             <li class="flex items-center space-x-6"><span class="text-gold text-4xl">✓</span> <span>Haushaltshilfe & Staubsaugen</span></li>
                         </ul>
                     </div>
                     <div class="bg-black/90 p-16 rounded-[4rem] border-gold border-4 shadow-2xl">
                         <div class="text-8xl mb-8">👵👴</div>
-                        <h3 class="text-4xl font-black mb-6 text-gold uppercase tracking-tighter underline">Sicherheit & Vertrauen</h3>
-                        <p class="text-2xl font-bold mb-10 italic opacity-90 leading-relaxed">Als Profi mit Sicherheits-Hintergrund garantiere ich Ihnen absolute Diskretion in Ihrem Zuhause.</p>
-                        <a href="tel:+4915215787871" class="inline-block bg-gold text-navy px-14 py-6 rounded-full font-black uppercase text-sm shadow-2xl hover:scale-105 tracking-widest">ANRUFEN</a>
+                        <h3 class="text-4xl font-black mb-6 text-gold uppercase tracking-tighter underline underline-offset-8">Sicherheit & Vertrauen</h3>
+                        <p class="text-2xl font-bold mb-10 italic opacity-90 leading-relaxed">Als zertifizierter Profi garantiere ich Ihnen absolute Diskretion in Ihrem Zuhause.</p>
+                        <button onclick="window.openAnfrageModal()" class="inline-block bg-gold text-navy px-14 py-6 rounded-full font-black uppercase text-sm shadow-2xl hover:scale-105 tracking-widest">JETZT ANFRAGEN</button>
                     </div>
                 </div>
             </div>
         </section>
 
         <!-- Footer -->
-        <footer id="kontakt" class="py-32 px-6 border-t-4 border-gold bg-white dark:bg-black transition-colors">
+        <footer id="footer-kontakt" class="py-32 px-6 border-t-4 border-gold bg-white dark:bg-black transition-colors">
             <div class="max-w-7xl mx-auto grid md:grid-cols-2 lg:grid-cols-4 gap-20">
                 <div class="col-span-full lg:col-span-2 text-left">
                     <h4 class="text-5xl font-black uppercase mb-8 tracking-tighter underline decoration-gold underline-offset-8 dark:text-white">🦅 KJANIS CLEANING</h4>
                     <p class="text-2xl italic font-bold opacity-70 dark:text-white">Hannover's Elite Standard. Sauberkeit & Sicherheit.</p>
                 </div>
                 <div>
-                    <h5 class="text-gold font-black uppercase text-sm tracking-widest mb-10 underline font-bold italic">Impressum</h5>
+                    <h5 class="text-gold font-black uppercase text-sm tracking-widest mb-10 underline font-bold italic italic">Impressum</h5>
                     <div class="space-y-6 text-xl font-black dark:text-white">
                         <p><span class="block opacity-40 uppercase text-[10px] mb-2 font-black tracking-widest">Inhaber</span> Kjani Zharki</p>
                         <p><span class="block opacity-40 uppercase text-[10px] mb-2 font-black tracking-widest">Adresse</span> Weizenfeldstraße 1, <br>30419 Hannover</p>
                         <p><span class="block opacity-40 uppercase text-[10px] mb-2 font-black tracking-widest">Steuer-Nr</span> 25/150/05335</p>
+                        <p><span class="block opacity-40 uppercase text-[10px] mb-2 font-black tracking-widest">Versicherung</span> 0101-601.856.342</p>
                     </div>
                 </div>
                 <div>
-                    <h5 class="text-gold font-black uppercase text-sm tracking-widest mb-10 underline font-bold italic">Kontakt</h5>
+                    <h5 class="text-gold font-black uppercase text-sm tracking-widest mb-10 underline font-bold italic italic">Kontakt</h5>
                     <div class="space-y-6 text-xl font-black dark:text-white">
                         <p>Region Hannover</p>
-                        <p class="text-gold text-2xl font-black break-words underline">info@elite-reinigung-hannover.de</p>
+                        <p class="text-gold text-2xl font-black break-words underline underline-offset-4 decoration-gold">info@elite-reinigung-hannover.de</p>
                         <p class="text-2xl font-black">+49 152 15787871</p>
                         <p class="opacity-20 pt-10 text-[10px] uppercase font-black">© 2026 Kjanis Cleaning | Hannover</p>
                     </div>
@@ -244,27 +275,42 @@
         </footer>
     </div>
 
-    <!-- LOCK SCREEN (Password: Kjani13675@) -->
+    <!-- PUBLIC ANFRAGE MODAL (Lead-Autopilot) -->
+    <div id="anfrage-modal" class="fixed inset-0 z-[2500] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/95 backdrop-blur-xl" onclick="window.closeAnfrageModal()"></div>
+        <div class="relative bg-white dark:bg-navy rounded-[3rem] w-full max-w-xl p-10 border-4 border-gold shadow-2xl text-black dark:text-white">
+            <h3 class="text-4xl font-black uppercase mb-8 text-center italic italic">Ihre Anfrage</h3>
+            <p class="text-center opacity-60 mb-10 font-bold uppercase text-[10px] tracking-widest">Sicher & diskret verschlüsselt.</p>
+            <div class="space-y-6">
+                <input type="text" id="webLeadName" placeholder="Ihr Name / Firma" class="w-full p-6 rounded-[2rem] bg-slate-50 dark:bg-black border-2 border-gold font-black text-xl outline-none focus:bg-gold/5 transition-all">
+                <input type="email" id="webLeadMail" placeholder="Ihre E-Mail" class="w-full p-6 rounded-[2rem] bg-slate-50 dark:bg-black border-2 border-gold font-black text-xl outline-none focus:bg-gold/5 transition-all">
+                <button onclick="window.submitAnfrage()" class="w-full bg-gold text-navy py-8 rounded-full font-black uppercase shadow-xl hover:scale-105 active:scale-95 transition-all text-xl mt-4">JETZT ABSENDEN ✨</button>
+            </div>
+            <button onclick="window.closeAnfrageModal()" class="w-full text-center mt-8 opacity-30 text-[10px] uppercase font-black tracking-widest italic italic">Fenster schließen</button>
+        </div>
+    </div>
+
+    <!-- LOCK SCREEN (Passwort: Kjani13675@) -->
     <div id="lock-screen" class="fixed inset-0 z-[1500] bg-black flex items-center justify-center p-6 text-center text-white">
-        <div class="max-w-md w-full">
+        <div class="max-w-md w-full bg-navy/50 p-12 rounded-[4rem] border-2 border-gold/20 backdrop-blur-xl">
             <div class="w-32 h-32 bg-navy rounded-[3rem] flex items-center justify-center text-6xl mb-10 shadow-2xl border-4 border-gold text-white mx-auto">🦅</div>
             <h1 class="text-gold text-4xl font-black mb-10 uppercase tracking-[0.5em]">HQ LOGIN</h1>
             <div class="space-y-6">
                 <input type="password" id="passInput" placeholder="Passwort" class="w-full text-center text-2xl p-8 bg-white/5 border-2 border-gold rounded-[3rem] outline-none font-bold text-gold focus:bg-white/10 transition-all">
                 <button onclick="window.checkPass()" class="w-full bg-gold text-navy py-8 rounded-full font-black shadow-2xl text-xl tracking-widest hover:scale-105 active:scale-95 transition-all uppercase">HQ ENTSPERREN</button>
             </div>
-            <button onclick="window.hideLockScreen()" class="text-white/30 text-[10px] font-black uppercase tracking-widest pt-12 italic">Abbrechen</button>
+            <button onclick="window.hideLockScreen()" class="text-white/30 text-[10px] font-black uppercase tracking-widest pt-12 italic italic">Abbrechen</button>
         </div>
     </div>
 
-    <!-- ADMIN RADAR v48 (CRM & Sales) -->
+    <!-- ADMIN RADAR (v51 Stability) -->
     <div id="admin-panel" class="p-8 min-h-screen bg-slate-900 selection:bg-gold selection:text-navy">
         <header class="max-w-7xl mx-auto flex flex-col lg:flex-row justify-between items-center mb-10 gap-8 bg-navy p-10 rounded-[4rem] border-t-[15px] border-gold shadow-2xl text-white">
             <div class="flex items-center space-x-6">
-                <div class="text-6xl">🦅</div>
+                <div class="text-6xl text-gold">🦅</div>
                 <div>
-                    <h1 class="text-4xl font-black uppercase tracking-tighter">KJANI <span class="text-gold italic">CRM RADAR</span></h1>
-                    <p class="text-[10px] opacity-40 uppercase tracking-[1em]">Enterprise Build v48.0</p>
+                    <h1 class="text-4xl font-black uppercase tracking-tighter">KJANI <span class="text-gold italic italic">CRM RADAR</span></h1>
+                    <p class="text-[10px] opacity-40 uppercase tracking-[1em]">Enterprise Stability v51.0</p>
                 </div>
             </div>
             <div class="flex flex-wrap justify-center gap-4">
@@ -274,30 +320,20 @@
             </div>
         </header>
 
-        <!-- CRM Radar Mixer (Google Suche) -->
-        <div class="max-w-7xl mx-auto mb-10 grid grid-cols-2 md:grid-cols-4 gap-4">
-            <button onclick="window.extSearch('Hausverwaltung Hannover')" class="p-6 bg-navy rounded-3xl border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all">🔎 Hausverwaltung</button>
-            <button onclick="window.extSearch('Arztpraxis Hannover')" class="p-6 bg-navy rounded-3xl border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all">🔎 Arztpraxen</button>
-            <button onclick="window.extSearch('Bürogebäude Hannover')" class="p-6 bg-navy rounded-3xl border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all">🔎 Büros</button>
-            <button onclick="window.extSearch('Seniorenheim Hannover')" class="p-6 bg-navy rounded-3xl border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all">🔎 Seniorenheime</button>
-        </div>
-
         <div id="main-radar" class="max-w-7xl mx-auto grid lg:grid-cols-12 gap-10">
-            <!-- CRM Liste (Leads) -->
             <div class="lg:col-span-5 space-y-10 text-white">
-                <div class="bg-navy p-10 rounded-[3.5rem] border-2 border-gold/30 shadow-2xl h-[700px] flex flex-col">
+                <div class="bg-navy p-10 rounded-[3.5rem] border-2 border-gold/30 shadow-2xl h-[750px] flex flex-col">
                     <h2 class="text-lg font-black uppercase text-gold mb-8 flex justify-between tracking-widest italic border-b-2 border-gold/10 pb-4">
-                        Kunden-Leads <span id="leadsCount" class="bg-gold text-navy px-6 py-1 rounded-full text-[16px] font-black">0</span>
+                        Kunden-Radar <span id="leadsCount" class="bg-gold text-navy px-6 py-1 rounded-full text-[16px] font-black">0</span>
                     </h2>
-                    <div id="leadsList" class="flex-grow overflow-y-auto custom-scroll space-y-6 pr-4"></div>
+                    <div id="leadsList" class="flex-grow overflow-y-auto custom-scroll space-y-6 pr-4 italic italic"></div>
                 </div>
             </div>
             
-            <!-- CRM Mail & Management -->
             <div class="lg:col-span-7">
-                <div class="bg-navy p-12 h-[700px] flex flex-col rounded-[3.5rem] border-t-[20px] border-gold relative shadow-2xl text-white">
+                <div class="bg-navy p-12 h-[750px] flex flex-col rounded-[3.5rem] border-t-[20px] border-gold relative shadow-2xl text-white">
                     <div class="flex justify-between items-center mb-10">
-                        <h2 class="text-gold font-black uppercase text-xs tracking-[0.2em] italic">Sales Management</h2>
+                        <h2 class="text-gold font-black uppercase text-xs tracking-[0.2em] italic">Elite Kommunikation</h2>
                         <div class="flex bg-black/40 p-2 rounded-full border border-gold/20">
                             <button id="btn-intro" onclick="window.switchTemplate('intro')" class="px-6 py-2 rounded-full text-[10px] font-black uppercase bg-gold text-navy transition-all">Vorstellung</button>
                             <button id="btn-followup" onclick="window.switchTemplate('followup')" class="px-6 py-2 rounded-full text-[10px] font-black uppercase text-gold transition-all">Erinnerung</button>
@@ -305,14 +341,14 @@
                     </div>
                     
                     <div class="grid grid-cols-1 gap-6 mb-8">
-                        <input type="text" id="custName" oninput="window.updateDraft()" placeholder="Name des Unternehmens / Ansprechpartner" class="w-full p-6 bg-black/40 border-2 border-gold/30 rounded-[2rem] outline-none font-black text-xl text-white focus:border-gold">
-                        <input type="email" id="custMail" oninput="window.updateDraft()" placeholder="Ziel E-Mail" class="w-full p-6 bg-black/40 border-2 border-gold/30 rounded-[2rem] outline-none font-black text-xl text-white focus:border-gold">
+                        <input type="text" id="custName" oninput="window.updateDraft()" placeholder="Kunden-Name" class="w-full p-6 bg-black/40 border-2 border-gold/30 rounded-[2rem] outline-none font-black text-xl text-white focus:border-gold transition-all">
+                        <input type="email" id="custMail" oninput="window.updateDraft()" placeholder="Kunden-Email" class="w-full p-6 bg-black/40 border-2 border-gold/30 rounded-[2rem] outline-none font-black text-xl text-white focus:border-gold transition-all">
                     </div>
-                    <textarea id="mailDraft" class="flex-grow w-full p-8 bg-black/40 rounded-[2rem] text-[18px] font-bold outline-none border-2 border-gold/10 leading-relaxed custom-scroll text-white focus:border-gold"></textarea>
+                    <textarea id="mailDraft" class="flex-grow w-full p-8 bg-black/40 rounded-[2rem] text-[15px] font-bold outline-none border-2 border-gold/10 leading-relaxed custom-scroll text-white focus:border-gold"></textarea>
                     
                     <div id="mail-status-msg" class="text-center py-4 text-xs font-bold uppercase hidden"></div>
                     
-                    <button id="send-btn" onclick="window.sendEliteMail()" class="mt-8 bg-gold text-navy py-8 rounded-full font-black uppercase tracking-widest shadow-2xl hover:scale-105 active:scale-95 transition-all text-xl">KUNDE KONTAKTIEREN 🚀</button>
+                    <button id="send-btn" onclick="window.sendEliteMail()" class="mt-8 bg-gold text-navy py-8 rounded-full font-black uppercase tracking-widest shadow-2xl hover:scale-105 active:scale-95 transition-all text-xl">MAIL ABSENDEN 🚀</button>
                 </div>
             </div>
         </div>
@@ -323,10 +359,10 @@
                 <div class="flex flex-col md:flex-row justify-between items-center mb-12 gap-6">
                     <div>
                         <h2 class="text-4xl font-black uppercase text-gold mb-2 italic">💰 Finanz-Zentrum</h2>
-                        <p class="opacity-50 font-bold italic uppercase text-[10px] tracking-widest">Compliance-Daten für den Steuerberater</p>
+                        <p class="opacity-50 font-bold italic uppercase text-[10px] tracking-widest italic">Bericht für das Finanzamt / Steuerberater</p>
                     </div>
                     <div class="flex gap-4">
-                        <button onclick="window.exportFinanceData()" class="px-10 py-5 bg-gold text-navy rounded-full font-black uppercase text-[10px] shadow-xl">Report Exportieren</button>
+                        <button onclick="window.exportFinanceData()" class="px-10 py-5 bg-gold text-navy rounded-full font-black uppercase text-[10px] shadow-xl">Bericht exportieren</button>
                         <button onclick="window.toggleFinance()" class="px-10 py-5 bg-white/10 text-white rounded-full font-black uppercase text-[10px]">Zurück</button>
                     </div>
                 </div>
@@ -337,12 +373,12 @@
         </div>
     </div>
 
-    <!-- Referenzen Modal -->
+    <!-- Review Modal -->
     <div id="review-modal" class="fixed inset-0 z-[2500] flex items-center justify-center p-4">
         <div class="absolute inset-0 bg-black/98 backdrop-blur-xl" onclick="window.closeReviewModal()"></div>
         <div class="relative bg-white dark:bg-navy rounded-[3rem] w-full max-w-2xl max-h-[90vh] flex flex-col border-4 border-gold shadow-2xl overflow-hidden text-black dark:text-white">
             <div class="p-8 border-b-2 border-gold flex justify-between items-center bg-gold/5">
-                <h3 class="text-2xl font-black uppercase italic">Erfahrung teilen</h3>
+                <h3 class="text-2xl font-black uppercase italic italic">Erfahrung teilen</h3>
                 <button onclick="window.closeReviewModal()" class="text-4xl text-gold">✕</button>
             </div>
             <div class="p-10 overflow-y-auto custom-scroll flex-grow space-y-10">
@@ -362,7 +398,7 @@
                 </div>
             </div>
             <div class="p-8 border-t-2 border-gold grid grid-cols-2 gap-4 bg-gold/5">
-                <button onclick="window.submitReview()" class="w-full bg-gold text-navy py-6 rounded-full font-black uppercase text-sm shadow-xl hover:scale-105 active:scale-95 transition-all">ABSENDEN ✨</button>
+                <button onclick="window.submitReview()" class="w-full bg-gold text-navy py-6 rounded-full font-black uppercase text-sm shadow-xl">SENDEN ✨</button>
                 <button onclick="window.closeReviewModal()" class="w-full bg-navy/10 dark:bg-white/10 py-6 rounded-full font-black uppercase text-sm">ABBRUCH</button>
             </div>
         </div>
@@ -375,7 +411,7 @@
 
         window.toggleLighting = () => {
             const isDark = document.documentElement.classList.toggle('dark');
-            localStorage.setItem('kj_v48_glow', isDark ? 'off' : 'on');
+            localStorage.setItem('kj_v51_glow', isDark ? 'off' : 'on');
             updateSwitchUI(isDark);
         };
         function updateSwitchUI(isDark) {
@@ -383,10 +419,15 @@
             if (btn) btn.innerText = isDark ? '🌙' : '☀️';
         }
         (function initTheme() {
-            const saved = localStorage.getItem('kj_v48_glow');
+            const saved = localStorage.getItem('kj_v51_glow');
             if (saved === 'on') { document.documentElement.classList.remove('dark'); updateSwitchUI(false); } 
             else { document.documentElement.classList.add('dark'); updateSwitchUI(true); }
         })();
+
+        window.scrollToContact = () => {
+            const footer = document.getElementById('footer-kontakt');
+            if(footer) footer.scrollIntoView({ behavior: 'smooth' });
+        };
 
         window.showLockScreen = () => { document.getElementById('public-site').style.display='none'; document.getElementById('lock-screen').style.display='flex'; };
         window.hideLockScreen = () => { document.getElementById('lock-screen').style.display='none'; document.getElementById('public-site').style.display='block'; };
@@ -395,75 +436,64 @@
                 document.getElementById('lock-screen').style.display='none'; 
                 document.getElementById('admin-panel').style.display='block'; 
                 document.getElementById('passInput').value = ""; 
-            } else { alert("ZUGRIFF VERWEIGERT."); } 
+            } else { alert("PASSWORT FALSCH."); } 
         };
-        window.backToSite = () => { document.getElementById('admin-panel').style.display='none'; document.getElementById('public-site').style.display='block'; };
-        window.exitHQ = () => { if(confirm("HQ verlassen?")) location.reload(); };
 
-        window.switchTemplate = (type) => {
-            window.currentTemplate = type;
-            document.getElementById('btn-intro').className = type === 'intro' ? 'px-6 py-2 rounded-full text-[10px] font-black uppercase bg-gold text-navy transition-all' : 'px-6 py-2 rounded-full text-[10px] font-black uppercase text-gold transition-all';
-            document.getElementById('btn-followup').className = type === 'followup' ? 'px-6 py-2 rounded-full text-[10px] font-black uppercase bg-gold text-navy transition-all' : 'px-6 py-2 rounded-full text-[10px] font-black uppercase text-gold transition-all';
-            window.updateDraft();
+        window.openAnfrageModal = () => document.getElementById('anfrage-modal').style.display = 'flex';
+        window.closeAnfrageModal = () => document.getElementById('anfrage-modal').style.display = 'none';
+
+        window.submitAnfrage = async () => {
+            const n = document.getElementById('webLeadName').value;
+            const e = document.getElementById('webLeadMail').value;
+            if(!n || !e) return alert("BITTE DATEN EINGEBEN.");
+            try {
+                await window.kj_fs.addDoc(window.kj_fs.collection(window.kj_db, 'artifacts', window.kj_appId, 'public', 'data', 'web_leads'), {
+                    name: n, email: e, status: 'new', timestamp: Date.now(), lastContact: Date.now()
+                });
+                alert("ANFRAGE GESENDET! Kjani Zharki wird Sie kontaktieren.");
+                window.closeAnfrageModal();
+            } catch (e) { alert("Sende-Fehler. Bitte prüfen."); }
         };
 
         window.renderLeads = (leads) => {
             const list = document.getElementById('leadsList');
             document.getElementById('leadsCount').innerText = leads.length;
-            
             list.innerHTML = leads.map(l => {
-                let badgeColor = "bg-gold";
-                let statusText = "NEU";
-                let blockMsg = "";
-                
-                if(l.status === 'intro') { badgeColor = "bg-blue-500"; statusText = "VORSTELLUNG GESENDET"; }
-                if(l.status === 'followup') { badgeColor = "bg-yellow-500"; statusText = "ERINNERUNG GESENDET"; }
-                if(l.status === 'blocked') { badgeColor = "bg-red-500"; statusText = "GESPERRT (3 MONATE)"; blockMsg = "Kunde hat nicht reagiert."; }
-
+                let badge = "bg-gold"; let stat = "NEU";
+                if(l.source === 'website') { badge = "bg-green-500"; stat = "WEB-ANFRAGE"; }
+                if(l.status === 'intro') { badge = "bg-blue-500"; stat = "KONTAKTIERT"; }
+                if(l.status === 'followup') { badge = "bg-yellow-500"; stat = "ERINNERT"; }
+                if(l.status === 'blocked') { badge = "bg-red-500"; stat = "PAUSE (3 MON)"; }
                 return `
-                <div class="p-6 bg-black/40 rounded-[2.5rem] border-2 border-gold/10 cursor-pointer hover:border-gold transition-all group ${l.status === 'blocked' ? 'opacity-50 cursor-not-allowed' : ''}" 
-                     onclick="${l.status === 'blocked' ? '' : `window.loadLead('${l.id}')`}">
-                    <div class="flex justify-between items-start mb-3">
-                        <span class="text-[10px] font-black ${badgeColor} text-navy px-3 py-1 rounded-full uppercase">${statusText}</span>
-                        <p class="text-[10px] font-black opacity-30 uppercase">${new Date(l.timestamp).toLocaleDateString()}</p>
+                <div class="p-8 bg-black/40 rounded-[3.5rem] border-2 border-gold/10 cursor-pointer hover:border-gold transition-all group ${l.status === 'blocked' ? 'opacity-50 cursor-not-allowed' : ''}" 
+                     onclick="${l.status === 'blocked' ? '' : `window.loadLead('${l.id}', '${l.source}')`}">
+                    <div class="flex justify-between mb-3">
+                        <span class="text-[9px] font-black ${badge} text-navy px-3 py-1 rounded-full uppercase">${stat}</span>
+                        <p class="text-[9px] opacity-30">${new Date(l.timestamp).toLocaleDateString()}</p>
                     </div>
                     <p class="font-black text-2xl text-white uppercase tracking-tighter">${l.name}</p>
-                    <p class="text-[10px] opacity-40 uppercase pt-2 break-all">${l.email}</p>
-                    ${blockMsg ? `<p class="text-[9px] text-red-400 font-bold mt-2 uppercase">⚠️ ${blockMsg}</p>` : ''}
-                    <div class="mt-4 flex gap-4 opacity-0 group-hover:opacity-100 transition-all">
-                        <button onclick="event.stopPropagation(); window.deleteLead('${l.id}')" class="text-[9px] text-red-500 font-black uppercase border-b border-red-500/20">Löschen</button>
-                    </div>
-                </div>
-                `;
+                    <p class="text-[10px] opacity-40 break-all pt-2">${l.email}</p>
+                    <button onclick="event.stopPropagation(); window.deleteLead('${l.id}', '${l.source}')" class="text-[9px] text-red-500 font-black opacity-0 group-hover:opacity-100 uppercase mt-4 block w-full text-center border-t border-red-500/10 pt-3">Löschen</button>
+                </div>`;
             }).join('');
         };
 
-        window.loadLead = (id) => {
+        window.loadLead = (id, source) => {
             const l = window.rawLeads.find(x => x.id === id);
             if(!l) return;
             document.getElementById('custName').value = l.name;
             document.getElementById('custMail').value = l.email;
-            window.currentLeadId = id;
-            
-            // Auto-Switch Template based on status
-            if(l.status === 'intro') window.switchTemplate('followup');
+            window.currentLeadId = id; window.currentLeadSource = source;
+            if(l.status === 'intro' || l.status === 'new') window.switchTemplate('followup');
             else window.switchTemplate('intro');
             
-            checkLeadConstraints(l);
-        };
-
-        const checkLeadConstraints = (lead) => {
             const btn = document.getElementById('send-btn');
             const msg = document.getElementById('mail-status-msg');
-            
-            if(lead.status === 'blocked') {
-                btn.disabled = true;
-                btn.className = "mt-8 bg-gray-700 text-gray-500 py-8 rounded-full font-black uppercase tracking-widest text-xl cursor-not-allowed";
-                msg.innerText = "Kunde ist für 3 Monate gesperrt.";
-                msg.classList.remove('hidden');
+            if(l.status === 'blocked') {
+                btn.disabled = true; btn.className = "mt-8 bg-gray-700 text-gray-500 py-8 rounded-full font-black uppercase tracking-widest text-xl cursor-not-allowed";
+                msg.innerText = "Kunde ist in der 3-monatigen Sperre."; msg.classList.remove('hidden');
             } else {
-                btn.disabled = false;
-                btn.className = "mt-8 bg-gold text-navy py-8 rounded-full font-black uppercase tracking-widest shadow-2xl hover:scale-105 active:scale-95 transition-all text-xl";
+                btn.disabled = false; btn.className = "mt-8 bg-gold text-navy py-8 rounded-full font-black uppercase tracking-widest shadow-2xl hover:scale-105 transition-all text-xl";
                 msg.classList.add('hidden');
             }
         };
@@ -471,11 +501,12 @@
         window.updateDraft = () => {
             const n = document.getElementById('custName').value || "[Name]";
             const draftArea = document.getElementById('mailDraft');
+            const signatur = `\n\n--------------------------------------------------\n🦅 KJANIS CLEANING HANNOVER\nElite Service | Reinheit & Sicherheit\n\nWeb: www.elite-reinigung-hannover.de\nMobil: +49 152 15787871\nE-Mail: info@elite-reinigung-hannover.de\n--------------------------------------------------\nZertifiziert nach § 34a GewO\nSteuer-Nr: 25/150/05335\nVersicherung: 0101-601.856.342\nAdresse: Weizenfeldstraße 1, 30419 Hannover`;
             
             if(window.currentTemplate === "intro") {
-                draftArea.value = `Sehr geehrte(r) ${n},\n\nmein Name ist Kjani Zharki und ich bin Inhaber von KJANIS CLEANING in Hannover. Wir unterstützen Hausbesitzer und Firmen bei der professionellen Reinigung sowie Senioren bei Alltags-Erledigungen (Einkauf, Baumarkt etc.).\n\nAls zertifizierter Fachmann (§ 34a GewO) garantiere ich Ihnen absolute Zuverlässigkeit und Diskretion.\n\nDarf ich mich Ihnen kurz persönlich vorstellen?\n\nHerzliche Grüße,\nKjani Zharki\n\nWeizenfeldstraße 1\n30419 Hannover\n+49 152 15787871\ninfo@elite-reinigung-hannover.de`;
+                draftArea.value = `Sehr geehrte(r) ${n},\n\nmein Name ist Kjani Zharki und ich bin Inhaber von KJANIS CLEANING in Hannover. Wir unterstützen Firmen bei der professionellen Büroreinigung sowie Senioren bei Alltags-Erledigungen (Einkauf, Baumarkt etc.).\n\nAls zertifizierter Profi mit Erfahrung bei der DB Sicherheit garantiere ich Ihnen absolute Diskretion und Zuverlässigkeit.\n\nGerne würde ich mich Ihnen persönlich vorstellen.\n\nMit freundlichen Grüßen,\nKjani Zharki${signatur}`;
             } else {
-                draftArea.value = `Guten Tag ${n},\n\nich wollte mich kurz erkundigen, ob Sie meine Nachricht zur Elite-Reinigung und Senioren-Alltagshilfe erhalten haben?\n\nWir haben aktuell in der Region Hannover noch Kapazitäten frei und würden uns freuen, Sie unterstützen zu dürfen.\n\nÜber eine kurze Rückmeldung würde ich mich sehr freuen.\n\nBeste Grüße,\nKjani Zharki\n\nKJANIS CLEANING HANNOVER\nWeizenfeldstraße 1\n30419 Hannover\n+49 152 15787871`;
+                draftArea.value = `Guten Tag ${n},\n\nich wollte mich kurz nach Ihrer Anfrage erkundigen? Haben Sie meine Nachricht zur Elite-Reinigung und Senioren-Alltagshilfe erhalten?\n\nÜber eine kurze Rückmeldung würde ich mich sehr freuen.\n\nBeste Grüße,\nKjani Zharki${signatur}`;
             }
         };
 
@@ -483,42 +514,50 @@
             const e = document.getElementById('custMail').value;
             const b = document.getElementById('mailDraft').value;
             const n = document.getElementById('custName').value;
-            if(!e || !n) return alert("Kunden-Daten fehlen!");
-
-            // Duplikat-Check für Neueinträge
+            if(!e || !n) return alert("Daten unvollständig.");
             const exists = window.rawLeads?.find(l => l.email === e);
             const uid = window.kj_auth.currentUser.uid;
-            
             try {
                 if(!exists) {
-                    // Neuer Lead wird erstellt
                     await window.kj_fs.addDoc(window.kj_fs.collection(window.kj_db, 'artifacts', window.kj_appId, 'users', uid, 'leads'), {
-                        name: n, email: e, status: 'intro', timestamp: Date.now(), lastContact: Date.now(), contactCount: 1
+                        name: n, email: e, status: 'intro', timestamp: Date.now(), lastContact: Date.now()
                     });
                 } else {
-                    // Bestehender Lead wird aktualisiert
                     let nextStatus = 'intro';
-                    if(exists.status === 'intro') nextStatus = 'followup';
+                    if(exists.status === 'intro' || exists.status === 'new') nextStatus = 'followup';
                     else if(exists.status === 'followup') nextStatus = 'blocked';
-
-                    await window.kj_fs.updateDoc(window.kj_fs.doc(window.kj_db, 'artifacts', window.kj_appId, 'users', uid, 'leads', exists.id), {
-                        status: nextStatus, lastContact: Date.now(), contactCount: (exists.contactCount || 1) + 1
+                    
+                    const path = exists.source === 'manual' ? 
+                        ['artifacts', window.kj_appId, 'users', uid, 'leads', exists.id] :
+                        ['artifacts', window.kj_appId, 'public', 'data', 'web_leads', exists.id];
+                        
+                    await window.kj_fs.updateDoc(window.kj_fs.doc(window.kj_db, ...path), {
+                        status: nextStatus, lastContact: Date.now()
                     });
                 }
-                
-                window.location.href = `mailto:${e}?subject=${window.currentTemplate === 'intro' ? 'Vorstellung: Kjanis Cleaning Hannover' : 'Kurze Nachfrage: Kjanis Cleaning'}&body=${encodeURIComponent(b)}`;
-            } catch (err) { alert("Fehler beim Speichern!"); }
+                window.location.href = `mailto:${e}?subject=Kjanis Cleaning Hannover&body=${encodeURIComponent(b)}`;
+            } catch (err) { alert("Sende-Fehler."); }
         };
 
-        window.deleteLead = async (id) => { if(confirm("Löschen?")) await window.kj_fs.deleteDoc(window.kj_fs.doc(window.kj_db, 'artifacts', window.kj_appId, 'users', window.kj_auth.currentUser.uid, 'leads', id)); };
-        window.toggleFinance = () => { const m = document.getElementById('main-radar'); const f = document.getElementById('finance-view'); if(f.style.display === 'block') { f.style.display = 'none'; m.style.display = 'grid'; } else { m.style.display = 'none'; f.style.display = 'block'; generateFinanceReport(); } };
-        window.generateFinanceReport = () => { const leads = window.rawLeads || []; const r = document.getElementById('finance-report'); let text = `FINANZ-LOG KJANIS CLEANING\nADRESSE: Weizenfeldstraße 1, 30419 Hannover\n\nERFASSTE SALES-AKTIVITÄTEN:\n--------------------------------------------------\n`; leads.forEach((l, i) => { text += `${i+1}. ${new Date(l.timestamp).toLocaleDateString()} | STATUS: ${l.status.toUpperCase()} | KUNDE: ${l.name} | MAIL: ${l.email}\n`; }); r.innerText = text; };
-        window.exportFinanceData = () => { const text = document.getElementById('finance-report').innerText; const blob = new Blob([text], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `Steuerbericht_Kjanis_Cleaning.txt`; a.click(); };
+        window.deleteLead = async (id, source) => { 
+            if(!confirm("Eintrag sicher löschen?")) return;
+            const path = source === 'manual' ? 
+                ['artifacts', window.kj_appId, 'users', window.kj_auth.currentUser.uid, 'leads', id] :
+                ['artifacts', window.kj_appId, 'public', 'data', 'web_leads', id];
+            await window.kj_fs.deleteDoc(window.kj_fs.doc(window.kj_db, ...path)); 
+        };
+
+        window.backToSite = () => { document.getElementById('admin-panel').style.display='none'; document.getElementById('public-site').style.display='block'; };
+        window.exitHQ = () => { if(confirm("HQ verlassen?")) location.reload(); };
+        window.toggleFinance = () => { const m = document.getElementById('main-radar'); const f = document.getElementById('finance-view'); if(f.style.display === 'block') { f.style.display = 'none'; m.style.display = 'grid'; } else { m.style.display = 'none'; f.style.display = 'block'; window.generateFinanceReport(); } };
+        window.generateFinanceReport = () => { const leads = window.rawLeads || []; const r = document.getElementById('finance-report'); let text = `FINANZ-LOG KJANIS CLEANING\nADRESSE: Weizenfeldstraße 1, 30419 Hannover\n\nERFASSTE AKTIVITÄTEN:\n--------------------------------------------------\n`; leads.forEach((l, i) => { text += `${i+1}. ${new Date(l.timestamp).toLocaleDateString()} | STATUS: ${l.status.toUpperCase()} | KUNDE: ${l.name} | MAIL: ${l.email}\n`; }); r.innerText = text; };
+        window.exportFinanceData = () => { const text = document.getElementById('finance-report').innerText; const blob = new Blob([text], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `Steuerbericht_Kjani.txt`; a.click(); };
         window.extSearch = (q) => window.open(`https://www.google.com/search?q=${encodeURIComponent(q)}`, '_blank');
+        window.switchTemplate = (t) => { window.currentTemplate = t; document.getElementById('btn-intro').className = t==='intro'?'px-6 py-2 rounded-full text-[10px] font-black uppercase bg-gold text-navy':'px-6 py-2 rounded-full text-[10px] font-black uppercase text-gold'; document.getElementById('btn-followup').className = t==='followup'?'px-6 py-2 rounded-full text-[10px] font-black uppercase bg-gold text-navy':'px-6 py-2 rounded-full text-[10px] font-black uppercase text-gold'; window.updateDraft(); };
         window.openReviewModal = () => document.getElementById('review-modal').style.display = 'flex';
         window.closeReviewModal = () => document.getElementById('review-modal').style.display = 'none';
         window.setStarRating = (r) => { window.currentRating = r; document.querySelectorAll('.star-item').forEach((s, i) => { if(i < r) s.classList.remove('grayscale', 'opacity-20'); else s.classList.add('grayscale', 'opacity-20'); }); };
-        window.submitReview = async () => { const n = document.getElementById('revName').value; const c = document.getElementById('revComment').value; if(!n || !c || !window.currentRating) return alert("Felder füllen!"); try { await window.kj_fs.addDoc(window.kj_fs.collection(window.kj_db, 'artifacts', window.kj_appId, 'public', 'data', 'reviews'), { name: n, comment: c, rating: window.currentRating, timestamp: Date.now() }); alert("Danke!"); window.closeReviewModal(); } catch (e) { alert("Fehler!"); } };
+        window.submitReview = async () => { const n = document.getElementById('revName').value; const c = document.getElementById('revComment').value; if(!n || !c || !window.currentRating) return alert("BITTE STERNE WÄHLEN."); try { await window.kj_fs.addDoc(window.kj_fs.collection(window.kj_db, 'artifacts', window.kj_appId, 'public', 'data', 'reviews'), { name: n, comment: c, rating: window.currentRating, timestamp: Date.now() }); alert("VIELEN DANK!"); window.closeReviewModal(); } catch (e) { alert("Datenbank-Fehler!"); } };
         window.updateDraft();
     </script>
 </body>
