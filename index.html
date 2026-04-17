@@ -4,50 +4,60 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     
-    <title>Kjanis Cleaning | Elite CRM & Lead-Autopilot Hannover</title>
-    <meta name="description" content="Kjanis Cleaning Hannover: Exklusive Reinigung & Senioren-Alltagshilfe. Zertifiziert nach § 34a GewO.">
+    <title>Kjanis Cleaning | Elite Service Hannover</title>
     
-    <!-- Firebase Engine - Elite Build 52.0 (Sales Booster & Stability) -->
+    <!-- Firebase Engine - Elite Build 73.0 (Elite Titan Resilience) -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, onAuthStateChanged, signInAnonymously, signInWithCustomToken, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Globales System-Management
+        window.kj_ready = false;
+        window.kj_appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
         const initSystem = async () => {
             try {
-                if (typeof __firebase_config === 'undefined') { hideLoader(); return; }
+                if (typeof __firebase_config === 'undefined' || !__firebase_config) { 
+                    hideLoader(); 
+                    return; 
+                }
                 const firebaseConfig = JSON.parse(__firebase_config);
                 const app = initializeApp(firebaseConfig);
                 const auth = getAuth(app);
                 const db = getFirestore(app);
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
                 window.kj_db = db;
                 window.kj_auth = auth;
-                window.kj_appId = appId;
+                window.kj_signOut = signOut;
                 window.kj_fs = { collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc, query };
 
-                onAuthStateChanged(auth, (user) => {
+                // Höchste Priorität: Authentifizierung (Regel 3)
+                const forceAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else if (!auth.currentUser) {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (e) { console.log("Re-Connecting..."); }
+                };
+
+                await forceAuth();
+
+                onAuthStateChanged(auth, async (user) => {
                     if (user) {
-                        startSync(user.uid);
+                        window.kj_ready = true;
+                        startRealtimeSync(user.uid);
                     } else {
-                        performAuth(auth);
+                        window.kj_ready = false;
+                        await forceAuth();
                     }
                 });
             } catch (e) {
-                console.error("System-Error:", e);
+                console.error("Critical System Error:", e);
                 hideLoader();
             }
-        };
-
-        const performAuth = async (auth) => {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch(e) { hideLoader(); }
         };
 
         const hideLoader = () => {
@@ -58,46 +68,35 @@
             }
         };
 
-        const startSync = (uid) => {
+        const startRealtimeSync = (uid) => {
             const { kj_db, kj_appId, kj_fs } = window;
             
-            // Sync für manuelle Leads
-            kj_fs.onSnapshot(kj_fs.collection(kj_db, 'artifacts', kj_appId, 'users', uid, 'leads'), (snap) => {
-                window.manualLeads = snap.docs.map(d => ({ id: d.id, source: 'manual', ...d.data() }));
-                mergeAndRender();
-            });
-
-            // Sync für Website-Anfragen
+            // Sync Website Anfragen (Public)
             kj_fs.onSnapshot(kj_fs.collection(kj_db, 'artifacts', kj_appId, 'public', 'data', 'web_leads'), (snap) => {
                 window.webLeads = snap.docs.map(d => ({ id: d.id, source: 'website', ...d.data() }));
-                mergeAndRender();
-            });
+                updateRadar();
+            }, (err) => console.log("Public Sync Offline"));
 
-            // Sync für Bewertungen
+            // Sync Manuelle Leads (Private)
+            kj_fs.onSnapshot(kj_fs.collection(kj_db, 'artifacts', kj_appId, 'users', uid, 'leads'), (snap) => {
+                window.manualLeads = snap.docs.map(d => ({ id: d.id, source: 'manual', ...d.data() }));
+                updateRadar();
+            }, (err) => console.log("Private Sync Offline"));
+
+            // Sync Rezensionen
             kj_fs.onSnapshot(kj_fs.collection(kj_db, 'artifacts', kj_appId, 'public', 'data', 'reviews'), (snap) => {
                 const data = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.timestamp - a.timestamp);
-                if(window.updateReviewsUI) window.updateReviewsUI(data);
+                if(window.renderReviews) window.renderReviews(data);
                 hideLoader();
-            });
-            setTimeout(hideLoader, 1000);
+            }, () => hideLoader());
+
+            setTimeout(hideLoader, 2000);
         };
 
-        const mergeAndRender = () => {
+        const updateRadar = () => {
             const all = [...(window.manualLeads || []), ...(window.webLeads || [])].sort((a,b) => b.timestamp - a.timestamp);
             window.rawLeads = all;
-            if(window.renderLeads) window.renderLeads(all);
-            
-            // Auto-Delete nach 3 Monaten für geblockte Leads
-            const now = Date.now();
-            const ninetyDays = 90 * 24 * 60 * 60 * 1000;
-            all.forEach(async lead => {
-                if(lead.status === 'blocked' && (now - lead.lastContact) > ninetyDays) {
-                    const path = lead.source === 'manual' ? 
-                        ['artifacts', window.kj_appId, 'users', window.kj_auth.currentUser.uid, 'leads', lead.id] :
-                        ['artifacts', window.kj_appId, 'public', 'data', 'web_leads', lead.id];
-                    await window.kj_fs.deleteDoc(window.kj_fs.doc(window.kj_db, ...path));
-                }
-            });
+            if(window.renderLeadsUI) window.renderLeadsUI(all);
         };
 
         window.addEventListener('DOMContentLoaded', initSystem);
@@ -119,22 +118,35 @@
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;700;800&family=Playfair+Display:wght@700;900&display=swap');
         body { font-family: 'Plus Jakarta Sans', sans-serif; transition: background-color 0.4s; overflow-x: hidden; }
         .font-serif { font-family: 'Playfair Display', serif; }
-        .card-elite { background-color: #ffffff; border: 4px solid #0f172a; color: #000000; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .card-elite { background-color: #ffffff; border: 4px solid #0f172a; color: #000000; transition: all 0.3s ease; }
         .dark .card-elite { background-color: #000000; border: 4px solid #d4af37; color: #ffffff; }
         .dark .nav-bg { background-color: rgba(0,0,0,0.95); border-bottom: 3px solid #d4af37; }
         html:not(.dark) .nav-bg { background-color: rgba(255,255,255,0.95); border-bottom: 3px solid #0f172a; }
-        #admin-panel, #lock-screen, #review-modal, #anfrage-modal { display: none; }
+        #admin-panel, #lock-screen, #anfrage-modal, #review-modal, #kj-msg-box { display: none; }
         .custom-scroll::-webkit-scrollbar { width: 6px; }
         .custom-scroll::-webkit-scrollbar-thumb { background: #d4af37; border-radius: 10px; }
-        .card-title { word-wrap: break-word; overflow-wrap: break-word; hyphens: auto; }
+        .text-glow { text-shadow: 0 0 15px rgba(212, 175, 55, 0.4); }
+        .btn-loading { pointer-events: none; opacity: 0.6; filter: grayscale(1); }
+        .senior-box { background-color: #000000; border: 4px solid #d4af37; box-shadow: 0 25px 50px -12px rgba(212, 175, 55, 0.3); }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
     </style>
 </head>
 <body class="bg-white text-black dark:bg-black dark:text-white transition-colors duration-300">
 
+    <!-- Ladebildschirm -->
     <div id="loading-overlay" class="fixed inset-0 z-[3000] bg-black flex items-center justify-center transition-opacity duration-500">
         <div class="text-center">
-            <div class="w-20 h-20 border-4 border-gold border-t-transparent rounded-full animate-spin mb-4 mx-auto"></div>
-            <p class="text-gold font-black uppercase tracking-widest text-sm italic">Elite System Online...</p>
+            <div class="w-16 h-16 border-4 border-gold border-t-transparent rounded-full animate-spin mb-4 mx-auto"></div>
+            <p class="text-gold font-black uppercase tracking-widest text-xs italic">Kjanis Cleaning Elite v73.0</p>
+        </div>
+    </div>
+
+    <!-- Elite Nachrichten-Zentrale -->
+    <div id="kj-msg-box" class="fixed inset-0 z-[5000] flex items-center justify-center p-6 backdrop-blur-md bg-black/40">
+        <div class="bg-navy border-4 border-gold p-10 rounded-[3rem] max-w-sm w-full text-center shadow-2xl">
+            <div class="text-5xl mb-6" id="kj-msg-icon">🦅</div>
+            <p id="kj-msg-text" class="text-white font-bold text-lg mb-8 italic"></p>
+            <button onclick="window.closeKjMsg()" class="w-full bg-gold text-navy py-4 rounded-full font-black uppercase tracking-widest hover:scale-105 transition-all">OK</button>
         </div>
     </div>
 
@@ -151,110 +163,116 @@
                 </div>
                 <div class="flex items-center space-x-4">
                     <button onclick="window.toggleLighting()" class="w-14 h-14 flex items-center justify-center rounded-full bg-gold/10 border-2 border-gold text-gold text-3xl shadow-lg" id="lightSwitch">🌙</button>
-                    <button onclick="window.openAnfrageModal()" class="px-10 py-4 bg-gold text-navy font-black rounded-full text-sm shadow-xl hover:scale-105 active:scale-95 transition-all">ANFRAGE</button>
+                    <button onclick="window.openAnfrageModal()" class="px-10 py-4 bg-gold text-navy font-black rounded-full text-sm shadow-xl hover:scale-105 active:scale-95 transition-all tracking-widest uppercase">ANFRAGE</button>
                 </div>
             </div>
         </nav>
 
-        <!-- Hero -->
+        <!-- Hero Sektion -->
         <section class="relative min-h-screen flex items-center justify-center px-6 text-center pt-24 overflow-hidden text-white">
             <div class="absolute inset-0 z-[-1] bg-black">
-                <img src="https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&q=80&w=2400" class="w-full h-full object-cover opacity-50" alt="[Elite Reinigung Hannover]">
+                <img src="https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&q=80&w=2400" class="w-full h-full object-cover opacity-50" alt="Elite Reinigung Hannover">
             </div>
             <div class="max-w-5xl mx-auto">
-                <div class="inline-flex items-center px-6 py-2 rounded-full bg-gold text-navy font-black uppercase tracking-widest mb-10 text-[12px] border-2 border-gold/30">
+                <div class="inline-flex items-center px-6 py-2 rounded-full bg-gold text-navy font-black uppercase tracking-widest mb-10 text-[10px] border-2 border-gold/30">
                     § 34a GewO Zertifiziert | Höchste Diskretion
                 </div>
                 <h1 class="font-serif text-6xl md:text-9xl lg:text-[11rem] leading-[0.85] mb-10 tracking-tighter drop-shadow-2xl">
                     Glanz <br> <span class="text-gold italic">ohne Ende.</span>
                 </h1>
-                <p class="text-2xl md:text-4xl max-w-4xl mx-auto mb-16 font-bold leading-relaxed drop-shadow-lg text-white">
+                <p class="text-2xl md:text-4xl max-w-4xl mx-auto mb-16 font-bold leading-relaxed drop-shadow-lg text-white text-glow italic">
                     Exklusive Reinigung & Senioren-Alltagshilfe in Hannover.
                 </p>
                 <div class="flex flex-col sm:flex-row justify-center gap-6">
-                    <button onclick="window.scrollToContact()" class="px-14 py-6 bg-gold text-navy rounded-full font-black uppercase text-sm shadow-2xl hover:scale-110 transition-all">TERMIN BUCHEN</button>
-                    <button onclick="window.openReviewModal()" class="px-14 py-6 bg-white/10 backdrop-blur-md text-white rounded-full font-black uppercase text-sm border-2 border-white/30 hover:bg-gold hover:text-navy transition-all">REFERENZEN</button>
+                    <button onclick="window.openAnfrageModal()" class="px-14 py-6 bg-gold text-navy rounded-full font-black uppercase text-sm shadow-2xl hover:scale-110 transition-all tracking-widest">TERMIN BUCHEN</button>
+                    <button onclick="window.openReviewModal()" class="px-14 py-6 bg-white/10 backdrop-blur-md text-white rounded-full font-black uppercase text-sm border-2 border-white/30 hover:bg-gold hover:text-navy transition-all tracking-widest">REFERENZEN</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Senioren-Sektor (Pixelgenau nach image_e950eb.jpg) -->
+        <section class="py-32 px-6 bg-navy text-white relative overflow-hidden">
+            <div class="max-w-7xl mx-auto flex flex-col lg:flex-row items-center justify-between gap-20">
+                <div class="lg:w-1/2">
+                    <div class="inline-block bg-gold text-navy px-6 py-2 rounded-full font-black text-[10px] uppercase mb-8 shadow-xl italic tracking-widest">SPEZIAL-SERVICE HANNOVER</div>
+                    <h2 class="text-6xl md:text-8xl font-serif italic mb-12 text-gold leading-tight text-glow">Sicher & entspannt wohnen.</h2>
+                    <ul class="space-y-12 text-2xl md:text-3xl font-black italic">
+                        <li class="flex items-center space-x-6">
+                            <span class="text-gold text-4xl font-black">✓</span> 
+                            <span>Einkaufsservice & Erledigungen</span>
+                        </li>
+                        <li class="flex items-center space-x-6">
+                            <span class="text-gold text-4xl font-black">✓</span> 
+                            <span>Haushaltshilfe & Staubsaugen</span>
+                        </li>
+                    </ul>
+                </div>
+                <div class="lg:w-1/2 senior-box p-16 rounded-[4rem] text-center relative overflow-hidden">
+                    <div class="text-9xl mb-12 drop-shadow-2xl">👵👴</div>
+                    <h3 class="text-4xl font-black mb-8 text-gold underline underline-offset-[12px] decoration-gold uppercase tracking-tighter">Vertrauen & Schutz</h3>
+                    <p class="text-xl font-bold mb-12 italic opacity-90 leading-relaxed px-4">Als zertifizierter Profi garantiere ich Ihnen absolute Diskretion in Ihrem Zuhause.</p>
+                    <button onclick="window.openAnfrageModal()" class="w-full bg-gold text-navy py-8 rounded-full font-black uppercase text-sm shadow-2xl hover:scale-105 transition-all tracking-[0.2em]">ANFRAGE SENDEN</button>
                 </div>
             </div>
         </section>
 
         <!-- Portfolio -->
         <section id="leistungen" class="py-32 px-6 bg-white dark:bg-black transition-colors">
-            <div class="max-w-7xl mx-auto">
-                <div class="text-center mb-24">
-                    <h2 class="text-gold font-black uppercase tracking-widest text-sm mb-4">Elite Portfolio</h2>
-                    <p class="text-4xl md:text-7xl font-serif dark:text-white text-black italic">Präzision in jedem Bereich.</p>
-                </div>
+            <div class="max-w-7xl mx-auto text-center">
+                <h2 class="text-gold font-black uppercase tracking-widest text-sm mb-4">Elite Portfolio</h2>
+                <p class="text-4xl md:text-7xl font-serif dark:text-white text-black italic mb-24">Service auf höchstem Niveau.</p>
                 <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-12">
-                    <div class="card-elite p-12 rounded-[4.5rem] shadow-xl flex flex-col items-center text-center hover:scale-105">
+                    <div class="card-elite p-12 rounded-[4.5rem] shadow-xl flex flex-col items-center hover:scale-105">
                         <div class="text-7xl mb-8">🏢</div>
-                        <h3 class="card-title text-2xl md:text-3xl font-black mb-6 uppercase tracking-tighter leading-tight w-full break-words">Büroreinigung</h3>
-                        <p class="opacity-80 font-bold italic text-sm mt-auto">Professionelle Unterhaltsreinigung für Firmen.</p>
+                        <h3 class="text-2xl font-black mb-6 uppercase tracking-tighter">Büroreinigung</h3>
+                        <p class="opacity-80 font-bold italic text-sm mt-auto">Reinheit nach Elite-Standards.</p>
                     </div>
-                    <div class="card-elite p-12 rounded-[4.5rem] shadow-xl flex flex-col items-center text-center hover:scale-105">
+                    <div class="card-elite p-12 rounded-[4.5rem] shadow-xl flex flex-col items-center hover:scale-105">
                         <div class="text-7xl mb-8">🪜</div>
-                        <h3 class="card-title text-2xl md:text-3xl font-black mb-6 uppercase tracking-tighter leading-tight w-full break-words">Treppenhaus</h3>
-                        <p class="opacity-80 font-bold italic text-sm mt-auto">Werterhalt durch absolute Sauberkeit.</p>
+                        <h3 class="text-2xl font-black mb-6 uppercase tracking-tighter">Treppenhaus</h3>
+                        <p class="opacity-80 font-bold italic text-sm mt-auto">Sorgfalt in jedem Stockwerk.</p>
                     </div>
-                    <div class="card-elite p-12 rounded-[4.5rem] shadow-xl flex flex-col items-center text-center hover:scale-105">
+                    <div class="card-elite p-12 rounded-[4.5rem] shadow-xl flex flex-col items-center hover:scale-105">
                         <div class="text-7xl mb-8">🩺</div>
-                        <h3 class="card-title text-2xl md:text-3xl font-black mb-6 uppercase tracking-tighter leading-tight w-full break-words">Praxisreinigung</h3>
-                        <p class="opacity-80 font-bold italic text-sm mt-auto">Hygiene-Exzellenz für Ihre Patienten.</p>
+                        <h3 class="text-2xl font-black mb-6 uppercase tracking-tighter">Praxisreinigung</h3>
+                        <p class="opacity-80 font-bold italic text-sm mt-auto">Hygiene für Mediziner.</p>
                     </div>
-                    <div class="card-elite p-12 rounded-[4.5rem] shadow-xl flex flex-col items-center text-center hover:scale-105">
+                    <div class="card-elite p-12 rounded-[4.5rem] shadow-xl flex flex-col items-center hover:scale-105">
                         <div class="text-7xl mb-8">🪟</div>
-                        <h3 class="card-title text-2xl md:text-3xl font-black mb-6 uppercase tracking-tighter leading-tight w-full break-words">Glasreinigung</h3>
-                        <p class="opacity-80 font-bold italic text-sm mt-auto">Glasklarer Durchblick für Ihre Fenster.</p>
+                        <h3 class="text-2xl font-black mb-6 uppercase tracking-tighter">Glasreinigung</h3>
+                        <p class="opacity-80 font-bold italic text-sm mt-auto">Klarer Durchblick für Fenster.</p>
                     </div>
                 </div>
             </div>
         </section>
 
-        <!-- Senioren-Service -->
-        <section class="py-32 px-6 bg-navy text-white relative overflow-hidden">
-            <div class="max-w-7xl mx-auto relative z-10 text-center lg:text-left">
-                <div class="grid lg:grid-cols-2 gap-20 items-center">
-                    <div>
-                        <div class="inline-block bg-gold text-navy px-6 py-2 rounded-full font-black text-xs uppercase mb-8 shadow-xl tracking-widest italic italic">Spezial-Service Hannover</div>
-                        <h2 class="text-5xl md:text-8xl font-serif italic mb-10 text-gold leading-tight">Sicher & entspannt wohnen.</h2>
-                        <ul class="space-y-8 text-2xl md:text-3xl font-black italic">
-                            <li class="flex items-center space-x-6"><span class="text-gold text-4xl">✓</span> <span>Einkaufsservice & Erledigungen</span></li>
-                            <li class="flex items-center space-x-6"><span class="text-gold text-4xl">✓</span> <span>Haushaltshilfe & Staubsaugen</span></li>
-                        </ul>
-                    </div>
-                    <div class="bg-black/90 p-16 rounded-[4rem] border-gold border-4 shadow-2xl">
-                        <div class="text-8xl mb-8">👵👴</div>
-                        <h3 class="text-4xl font-black mb-6 text-gold uppercase tracking-tighter underline underline-offset-8">Vertrauen & Schutz</h3>
-                        <p class="text-2xl font-bold mb-10 italic opacity-90 leading-relaxed text-readable">Als zertifizierter Profi garantiere ich Ihnen absolute Diskretion in Ihrem Zuhause.</p>
-                        <button onclick="window.openAnfrageModal()" class="inline-block bg-gold text-navy px-14 py-6 rounded-full font-black uppercase text-sm shadow-2xl hover:scale-105 tracking-widest">ANFRAGE SENDEN</button>
-                    </div>
-                </div>
+        <!-- Rezensionen -->
+        <section class="py-24 px-6 bg-white dark:bg-black transition-colors">
+            <div class="max-w-7xl mx-auto">
+                <div id="reviews-container" class="grid md:grid-cols-3 gap-8"></div>
             </div>
         </section>
 
         <!-- Footer -->
-        <footer id="footer-kontakt" class="py-32 px-6 border-t-4 border-gold bg-white dark:bg-black transition-colors">
+        <footer class="py-32 px-6 border-t-4 border-gold bg-white dark:bg-black transition-colors">
             <div class="max-w-7xl mx-auto grid md:grid-cols-2 lg:grid-cols-4 gap-20">
                 <div class="col-span-full lg:col-span-2 text-left">
-                    <h4 class="text-5xl font-black uppercase mb-8 tracking-tighter underline decoration-gold underline-offset-8 dark:text-white">🦅 KJANIS CLEANING</h4>
-                    <p class="text-2xl italic font-bold opacity-70 dark:text-white">Hannover's Elite Standard. Sauberkeit & Sicherheit.</p>
+                    <h4 class="text-5xl font-black uppercase mb-8 tracking-tighter underline decoration-gold dark:text-white">🦅 KJANIS CLEANING</h4>
+                    <p class="text-2xl italic font-bold opacity-70">Hannover's Elite Standard.</p>
                 </div>
                 <div>
-                    <h5 class="text-gold font-black uppercase text-sm tracking-widest mb-10 underline font-bold italic italic">Impressum</h5>
-                    <div class="space-y-6 text-xl font-black dark:text-white">
-                        <p><span class="block opacity-40 uppercase text-[10px] mb-2 font-black tracking-widest">Inhaber</span> Kjani Zharki</p>
-                        <p><span class="block opacity-40 uppercase text-[10px] mb-2 font-black tracking-widest">Adresse</span> Weizenfeldstraße 1, <br>30419 Hannover</p>
-                        <p><span class="block opacity-40 uppercase text-[10px] mb-2 font-black tracking-widest">Steuer-Nr</span> 25/150/05335</p>
-                        <p><span class="block opacity-40 uppercase text-[10px] mb-2 font-black tracking-widest">Haftpflicht</span> 0101-601.856.342</p>
+                    <h5 class="text-gold font-black uppercase text-sm mb-10 underline italic">Impressum</h5>
+                    <div class="space-y-6 text-xl font-black">
+                        <p>Kjani Zharki</p>
+                        <p>Weizenfeldstraße 1, 30419 Hannover</p>
+                        <p class="text-[10px] opacity-40 uppercase tracking-widest italic">Steuer-Nr: 25/150/05335</p>
                     </div>
                 </div>
                 <div>
-                    <h5 class="text-gold font-black uppercase text-sm tracking-widest mb-10 underline font-bold italic italic">Kontakt</h5>
-                    <div class="space-y-6 text-xl font-black dark:text-white">
-                        <p>Region Hannover</p>
-                        <p class="text-gold text-2xl font-black break-words underline underline-offset-4 decoration-gold">info@elite-reinigung-hannover.de</p>
-                        <p class="text-2xl font-black">+49 152 15787871</p>
-                        <p class="opacity-20 pt-10 text-[10px] uppercase font-black">© 2026 Kjanis Cleaning</p>
+                    <h5 class="text-gold font-black uppercase text-sm mb-10 underline italic">Kontakt</h5>
+                    <div class="space-y-6 text-xl font-black">
+                        <p class="text-gold underline decoration-gold break-all">info@elite-reinigung-hannover.de</p>
+                        <p class="text-2xl">+49 152 15787871</p>
                     </div>
                 </div>
             </div>
@@ -264,295 +282,340 @@
     <!-- ANFRAGE MODAL -->
     <div id="anfrage-modal" class="fixed inset-0 z-[2500] flex items-center justify-center p-4">
         <div class="absolute inset-0 bg-black/95 backdrop-blur-xl" onclick="window.closeAnfrageModal()"></div>
-        <div class="relative bg-white dark:bg-navy rounded-[3rem] w-full max-w-xl p-10 border-4 border-gold shadow-2xl text-black dark:text-white">
-            <h3 class="text-4xl font-black uppercase mb-8 text-center italic italic">Ihre Anfrage</h3>
+        <div class="relative bg-white dark:bg-navy rounded-[3.5rem] w-full max-w-2xl p-10 border-4 border-gold shadow-2xl text-black dark:text-white overflow-y-auto max-h-[90vh] custom-scroll">
+            <h3 class="text-4xl font-black uppercase mb-6 text-center italic">Elite Anfrage</h3>
             <div class="space-y-6">
-                <input type="text" id="webLeadName" placeholder="Ihr Name / Firma" class="w-full p-6 rounded-[2rem] bg-slate-50 dark:bg-black border-2 border-gold font-black text-xl outline-none">
-                <input type="email" id="webLeadMail" placeholder="Ihre E-Mail" class="w-full p-6 rounded-[2rem] bg-slate-50 dark:bg-black border-2 border-gold font-black text-xl outline-none">
-                <button onclick="window.submitAnfrage()" class="w-full bg-gold text-navy py-8 rounded-full font-black uppercase shadow-xl hover:scale-105 active:scale-95 transition-all text-xl mt-4">ABSENDEN ✨</button>
+                <div class="flex flex-col items-center">
+                    <input type="file" id="webPhoto" accept="image/*" class="hidden" onchange="window.handlePhoto(this)">
+                    <button onclick="document.getElementById('webPhoto').click()" class="w-full p-10 border-4 border-dashed border-gold rounded-[2rem] bg-gold/5 flex items-center justify-center space-x-6 hover:bg-gold/10 transition-all">
+                        <span class="text-5xl">📸</span>
+                        <span id="photoLabel" class="font-black uppercase text-xs tracking-widest">FOTO HINZUFÜGEN</span>
+                    </button>
+                    <div id="photoPrevContainer" class="mt-8 hidden flex justify-center"><img id="photoPrev" class="w-40 h-40 object-cover rounded-3xl border-4 border-gold shadow-2xl"></div>
+                </div>
+                <input type="text" id="webName" placeholder="Ihr Name" class="w-full p-8 rounded-[2rem] bg-slate-50 dark:bg-black border-2 border-gold font-black text-xl outline-none focus:bg-gold/5 transition-all">
+                <input type="email" id="webMail" placeholder="Ihre E-Mail" class="w-full p-8 rounded-[2rem] bg-slate-50 dark:bg-black border-2 border-gold font-black text-xl outline-none focus:bg-gold/5 transition-all">
+                <textarea id="webMessage" class="w-full p-8 rounded-[2rem] bg-slate-50 dark:bg-black border-2 border-gold font-bold text-lg min-h-[150px] outline-none focus:bg-gold/5 transition-all" placeholder="Was kann ich für Sie tun?"></textarea>
+                <button id="web-submit-btn" onclick="window.submitWebInquiry()" class="w-full bg-gold text-navy py-10 rounded-full font-black uppercase shadow-2xl text-2xl mt-4 tracking-widest transition-all hover:scale-105 active:scale-95">NACHRICHT ABSENDEN 🚀</button>
             </div>
-            <button onclick="window.closeAnfrageModal()" class="w-full text-center mt-8 opacity-30 text-[10px] uppercase font-black tracking-widest italic italic">Schließen</button>
+            <button onclick="window.closeAnfrageModal()" class="w-full text-center mt-8 text-[10px] font-black opacity-30 uppercase underline underline-offset-8 italic">Abbrechen</button>
         </div>
     </div>
 
-    <!-- LOCK SCREEN (Kjani13675@) -->
+    <!-- LOCK SCREEN -->
     <div id="lock-screen" class="fixed inset-0 z-[1500] bg-black flex items-center justify-center p-6 text-center text-white">
         <div class="max-w-md w-full bg-navy/50 p-12 rounded-[4rem] border-2 border-gold/20 backdrop-blur-xl">
-            <div class="w-32 h-32 bg-navy rounded-[3rem] flex items-center justify-center text-6xl mb-10 shadow-2xl border-4 border-gold text-white mx-auto">🦅</div>
+            <div class="w-32 h-32 bg-navy rounded-[3rem] flex items-center justify-center text-6xl mb-10 shadow-2xl border-4 border-gold mx-auto">🦅</div>
             <h1 class="text-gold text-4xl font-black mb-10 uppercase tracking-[0.5em]">HQ LOGIN</h1>
-            <div class="space-y-6">
-                <input type="password" id="passInput" placeholder="Passwort" class="w-full text-center text-2xl p-8 bg-white/5 border-2 border-gold rounded-[3rem] outline-none font-bold text-gold focus:bg-white/10 transition-all">
-                <button onclick="window.checkPass()" class="w-full bg-gold text-navy py-8 rounded-full font-black shadow-2xl text-xl tracking-widest hover:scale-105 active:scale-95 transition-all uppercase tracking-widest">ENTSPERREN</button>
+            <input type="password" id="passInput" placeholder="Passwort" class="w-full text-center text-2xl p-8 bg-white/5 border-2 border-gold rounded-[3rem] outline-none font-bold text-gold focus:bg-white/10 transition-all mb-12">
+            <div class="space-y-4">
+                <button onclick="window.checkPass()" class="w-full bg-gold text-navy py-8 rounded-full font-black shadow-2xl text-xl tracking-widest hover:scale-105 transition-all uppercase">ENTSPERREN</button>
+                <button onclick="window.hideLockScreen()" class="w-full py-6 text-white/30 text-xs font-black uppercase tracking-[0.3em] underline underline-offset-8">← ZURÜCK ZUR WEBSITE</button>
             </div>
         </div>
     </div>
 
-    <!-- ADMIN RADAR (v52 Sales Radar) -->
-    <div id="admin-panel" class="p-8 min-h-screen bg-slate-900 selection:bg-gold selection:text-navy">
-        <header class="max-w-7xl mx-auto flex flex-col lg:flex-row justify-between items-center mb-10 gap-8 bg-navy p-10 rounded-[4rem] border-t-[15px] border-gold shadow-2xl text-white">
+    <!-- RADAR -->
+    <div id="admin-panel" class="p-8 min-h-screen bg-slate-900 selection:bg-gold selection:text-navy text-white">
+        <header class="max-w-7xl mx-auto flex flex-col lg:flex-row justify-between items-center mb-10 gap-8 bg-navy p-10 rounded-[4rem] border-t-[15px] border-gold shadow-2xl">
             <div class="flex items-center space-x-6">
                 <div class="text-6xl text-gold">🦅</div>
                 <div>
-                    <h1 class="text-4xl font-black uppercase tracking-tighter">KJANI <span class="text-gold italic italic">SALES RADAR</span></h1>
-                    <p class="text-[10px] opacity-40 uppercase tracking-[1em]">Enterprise Build v52.0</p>
+                    <h1 class="text-4xl font-black uppercase tracking-tighter italic italic">KJANI <span class="text-gold">RADAR</span></h1>
+                    <p class="text-[10px] opacity-40 uppercase tracking-[1em]">Titan v73.0</p>
                 </div>
             </div>
-            <div class="flex flex-wrap justify-center gap-4">
-                <button onclick="window.toggleFinance()" class="px-8 py-4 bg-white/10 text-gold border-2 border-gold rounded-full text-[10px] font-black uppercase hover:bg-gold hover:text-navy transition-all">💰 FINANZEN</button>
-                <button onclick="window.backToSite()" class="px-8 py-4 bg-gold text-navy rounded-full text-[10px] font-black uppercase shadow-xl">WEBSITE</button>
-                <button onclick="window.exitHQ()" class="px-8 py-4 bg-white/10 text-white rounded-full text-[10px] font-black uppercase">LOGOUT</button>
+            <div class="flex gap-4">
+                <button onclick="window.backToSite()" class="px-10 py-5 bg-gold text-navy rounded-full text-xs font-black uppercase shadow-2xl hover:scale-105 active:scale-95 transition-all tracking-widest">← WEBSITE</button>
+                <button onclick="window.exitHQ()" class="px-10 py-5 bg-white/10 text-white rounded-full text-xs font-black uppercase hover:bg-red-500 transition-all">LOGOUT</button>
             </div>
         </header>
 
-        <!-- Lead Mixer -->
-        <div class="max-w-7xl mx-auto mb-10 grid grid-cols-2 md:grid-cols-5 gap-4">
-            <button onclick="window.extSearch('Hausverwaltung Hannover')" class="p-6 bg-navy rounded-3xl border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all">🔎 Hausverwalter</button>
-            <button onclick="window.extSearch('Arztpraxis Hannover')" class="p-6 bg-navy rounded-3xl border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all">🔎 Arztpraxen</button>
-            <button onclick="window.extSearch('Kanzlei Hannover')" class="p-6 bg-navy rounded-3xl border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all">🔎 Kanzleien</button>
-            <button onclick="window.extSearch('Seniorenheim Hannover')" class="p-6 bg-navy rounded-3xl border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all">🔎 Senioren</button>
-            <button onclick="window.extSearch('Immobilien Hannover')" class="p-6 bg-navy rounded-3xl border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all">🔎 Immobilien</button>
+        <!-- Jagd Buttons -->
+        <div class="max-w-7xl mx-auto mb-10 grid grid-cols-2 md:grid-cols-4 gap-6">
+            <button onclick="window.extSearch('Hausverwaltung Hannover')" class="p-6 bg-navy rounded-[2.5rem] border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all italic tracking-widest shadow-xl">🏢 Hausverwalter</button>
+            <button onclick="window.extSearch('Arztpraxis Hannover')" class="p-6 bg-navy rounded-[2.5rem] border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all italic tracking-widest shadow-xl">🩺 Arztpraxen</button>
+            <button onclick="window.extSearch('Kanzlei Hannover')" class="p-6 bg-navy rounded-[2.5rem] border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all italic tracking-widest shadow-xl">⚖️ Kanzleien</button>
+            <button onclick="window.extSearch('Seniorenresidenz Hannover')" class="p-6 bg-navy rounded-[2.5rem] border-2 border-gold/20 text-gold font-black uppercase text-[10px] hover:border-gold transition-all italic tracking-widest shadow-xl">👵 Seniorenheime</button>
+            <button onclick="window.extSearch('Fitnessstudio Hannover')" class="p-6 bg-navy rounded-[2.5rem] border-2 border-white/10 text-white font-black uppercase text-[10px] hover:border-gold transition-all italic tracking-widest shadow-xl">🏋️ Fitnessstudios</button>
+            <button onclick="window.extSearch('Kita Hannover privat')" class="p-6 bg-navy rounded-[2.5rem] border-2 border-white/10 text-white font-black uppercase text-[10px] hover:border-gold transition-all italic tracking-widest shadow-xl">🧸 Kitas & Schulen</button>
+            <button onclick="window.extSearch('Ferienwohnung Hannover Reinigung')" class="p-6 bg-navy rounded-[2.5rem] border-2 border-white/10 text-white font-black uppercase text-[10px] hover:border-gold transition-all italic tracking-widest shadow-xl">🏠 Airbnb & FeWo</button>
+            <button onclick="window.extSearch('Neubau Hannover Bauträger')" class="p-6 bg-navy rounded-[2.5rem] border-2 border-white/10 text-white font-black uppercase text-[10px] hover:border-gold transition-all italic tracking-widest shadow-xl">🏗️ Baustellen</button>
         </div>
 
         <div id="main-radar" class="max-w-7xl mx-auto grid lg:grid-cols-12 gap-10">
-            <!-- Lead Liste -->
-            <div class="lg:col-span-5 space-y-10 text-white">
+            <div class="lg:col-span-4 space-y-10">
                 <div class="bg-navy p-10 rounded-[3.5rem] border-2 border-gold/30 shadow-2xl h-[750px] flex flex-col">
-                    <h2 class="text-lg font-black uppercase text-gold mb-8 flex justify-between tracking-widest italic border-b-2 border-gold/10 pb-4">
-                        Kunden-Radar <span id="leadsCount" class="bg-gold text-navy px-6 py-1 rounded-full text-[16px] font-black">0</span>
-                    </h2>
-                    <div id="leadsList" class="flex-grow overflow-y-auto custom-scroll space-y-6 pr-4 italic italic"></div>
+                    <h2 class="text-lg font-black uppercase text-gold mb-8 flex justify-between border-b-2 border-gold/10 pb-4 italic tracking-widest italic">Leads <span id="leadsCount" class="bg-gold text-navy px-4 py-1 rounded-full text-sm">0</span></h2>
+                    <div id="leadsList" class="flex-grow overflow-y-auto custom-scroll space-y-4 pr-2"></div>
                 </div>
             </div>
             
-            <!-- Mail Center -->
-            <div class="lg:col-span-7">
-                <div class="bg-navy p-12 h-[750px] flex flex-col rounded-[3.5rem] border-t-[20px] border-gold relative shadow-2xl text-white">
+            <div class="lg:col-span-8">
+                <div class="bg-navy p-12 h-[750px] flex flex-col rounded-[3.5rem] border-t-[20px] border-gold shadow-2xl overflow-y-auto custom-scroll text-center">
+                    <div id="lead-details" class="mb-10 hidden border-b border-gold/20 pb-10">
+                        <h3 class="text-gold font-black uppercase text-xl mb-6 italic tracking-[0.2em]">📋 Details & Foto</h3>
+                        <div class="bg-black/40 p-10 rounded-[3.5rem] border-2 border-gold/10 inline-block w-full shadow-inner">
+                            <p id="leadDescText" class="font-bold text-xl leading-relaxed italic mb-8 text-white"></p>
+                            <img id="leadDescImg" class="mt-8 rounded-3xl border-4 border-gold hidden max-w-sm mx-auto shadow-2xl cursor-zoom-in transition-transform hover:scale-105" onclick="window.openFullImage(this.src)">
+                        </div>
+                    </div>
+
                     <div class="flex justify-between items-center mb-10">
-                        <h2 class="text-gold font-black uppercase text-xs tracking-[0.2em] italic italic">Kommunikations-Center</h2>
-                        <div class="flex bg-black/40 p-2 rounded-full border border-gold/20">
-                            <button id="btn-intro" onclick="window.switchTemplate('intro')" class="px-6 py-2 rounded-full text-[10px] font-black uppercase bg-gold text-navy transition-all">Vorstellung</button>
-                            <button id="btn-followup" onclick="window.switchTemplate('followup')" class="px-6 py-2 rounded-full text-[10px] font-black uppercase text-gold transition-all">Erinnerung</button>
+                        <h2 class="text-gold font-black uppercase text-xs tracking-[0.2em] italic italic">CRM-Briefing</h2>
+                        <div class="flex bg-black/40 p-2 rounded-full border border-gold/20 shadow-xl overflow-x-auto no-scrollbar">
+                            <button id="btn-vorstellung" onclick="window.switchTemplate('vorstellung')" class="px-6 py-3 rounded-full text-[9px] font-black uppercase transition-all whitespace-nowrap bg-gold text-navy shadow-lg">Vorstellung</button>
+                            <button id="btn-angebot" onclick="window.switchTemplate('angebot')" class="px-6 py-3 rounded-full text-[9px] font-black uppercase transition-all whitespace-nowrap text-gold">Angebot</button>
+                            <button id="btn-followup" onclick="window.switchTemplate('followup')" class="px-6 py-3 rounded-full text-[9px] font-black uppercase transition-all whitespace-nowrap text-gold">Erinnerung</button>
                         </div>
                     </div>
                     
-                    <div class="grid grid-cols-1 gap-6 mb-8">
-                        <input type="text" id="custName" oninput="window.updateDraft()" placeholder="Kunden-Name / Firma" class="w-full p-6 bg-black/40 border-2 border-gold/30 rounded-[2rem] outline-none font-black text-xl text-white focus:border-gold transition-all">
-                        <input type="email" id="custMail" oninput="window.updateDraft()" placeholder="Ziel E-Mail" class="w-full p-6 bg-black/40 border-2 border-gold/30 rounded-[2rem] outline-none font-black text-xl text-white focus:border-gold transition-all">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                        <input type="text" id="custName" oninput="window.updateDraft()" placeholder="Kunde" class="w-full p-8 bg-black/40 border-2 border-gold/30 rounded-[2.5rem] outline-none font-black text-white focus:border-gold transition-all shadow-inner">
+                        <input type="email" id="custMail" oninput="window.updateDraft()" placeholder="E-Mail" class="w-full p-8 bg-black/40 border-2 border-gold/30 rounded-[2.5rem] outline-none font-black text-white focus:border-gold transition-all shadow-inner">
                     </div>
-                    <textarea id="mailDraft" class="flex-grow w-full p-8 bg-black/40 rounded-[2rem] text-[15px] font-bold outline-none border-2 border-gold/10 leading-relaxed custom-scroll text-white focus:border-gold"></textarea>
+                    <textarea id="mailDraft" class="flex-grow w-full p-10 bg-black/40 rounded-[3rem] text-sm font-bold outline-none border-2 border-gold/10 leading-relaxed custom-scroll text-white focus:border-gold shadow-inner"></textarea>
                     
-                    <div id="mail-status-msg" class="text-center py-4 text-xs font-bold uppercase hidden"></div>
-                    
-                    <button id="send-btn" onclick="window.sendEliteMail()" class="mt-8 bg-gold text-navy py-8 rounded-full font-black uppercase tracking-widest shadow-2xl hover:scale-105 active:scale-95 transition-all text-xl">PROFI-MAIL SENDEN 🚀</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Finanz Modus -->
-        <div id="finance-view" class="max-w-7xl mx-auto">
-            <div class="bg-navy p-14 rounded-[4rem] border-t-[25px] border-gold shadow-2xl text-white">
-                <div class="flex flex-col md:flex-row justify-between items-center mb-12 gap-6">
-                    <div>
-                        <h2 class="text-4xl font-black uppercase text-gold mb-2 italic">💰 Finanz-Zentrum</h2>
-                        <p class="opacity-50 font-bold italic uppercase text-[10px] tracking-widest italic italic">Daten-Export für den Steuerberater</p>
-                    </div>
-                    <div class="flex gap-4">
-                        <button onclick="window.exportFinanceData()" class="px-10 py-5 bg-gold text-navy rounded-full font-black uppercase text-[10px] shadow-xl">Exportieren</button>
-                        <button onclick="window.toggleFinance()" class="px-10 py-5 bg-white/10 text-white rounded-full font-black uppercase text-[10px]">Schließen</button>
-                    </div>
-                </div>
-                <div class="bg-black/30 p-10 rounded-[3rem] border-2 border-gold/20">
-                    <div id="finance-report" class="font-mono text-sm opacity-80 whitespace-pre-wrap max-h-[500px] overflow-y-auto custom-scroll pr-6 leading-loose italic italic"></div>
+                    <div id="leadShieldMsg" class="hidden text-center py-6 text-xs font-black uppercase text-red-500 italic tracking-[0.2em] bg-red-500/10 rounded-full mt-6">⚠️ Lead gesperrt: 3-monatige Pause aktiv.</div>
+                    <button id="send-btn" onclick="window.sendEliteMail()" class="mt-8 bg-gold text-navy py-10 rounded-full font-black uppercase tracking-[0.4em] shadow-2xl hover:scale-105 active:scale-95 transition-all text-2xl italic italic">MAIL SENDEN 🚀</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Review Modal -->
+    <!-- REVIEWS MODAL -->
     <div id="review-modal" class="fixed inset-0 z-[2500] flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-black/98 backdrop-blur-xl" onclick="window.closeReviewModal()"></div>
-        <div class="relative bg-white dark:bg-navy rounded-[3rem] w-full max-w-2xl max-h-[90vh] flex flex-col border-4 border-gold shadow-2xl overflow-hidden text-black dark:text-white">
-            <div class="p-8 border-b-2 border-gold flex justify-between items-center bg-gold/5">
-                <h3 class="text-2xl font-black uppercase italic italic">Erfahrung teilen</h3>
-                <button onclick="window.closeReviewModal()" class="text-4xl text-gold">✕</button>
-            </div>
-            <div class="p-10 overflow-y-auto custom-scroll flex-grow space-y-10">
-                <div class="text-center">
-                    <p class="font-black uppercase text-[10px] mb-6 tracking-widest opacity-60">Bewertung wählen</p>
-                    <div class="flex justify-center space-x-3">
-                        <span class="star-item grayscale opacity-20" onclick="window.setStarRating(1)">⭐</span>
-                        <span class="star-item grayscale opacity-20" onclick="window.setStarRating(2)">⭐</span>
-                        <span class="star-item grayscale opacity-20" onclick="window.setStarRating(3)">⭐</span>
-                        <span class="star-item grayscale opacity-20" onclick="window.setStarRating(4)">⭐</span>
-                        <span class="star-item grayscale opacity-20" onclick="window.setStarRating(5)">⭐</span>
-                    </div>
+        <div class="absolute inset-0 bg-black/95 backdrop-blur-xl" onclick="window.closeReviewModal()"></div>
+        <div class="relative bg-white dark:bg-navy rounded-[3.5rem] w-full max-w-xl p-12 border-4 border-gold shadow-2xl text-black dark:text-white">
+            <h3 class="text-3xl font-black uppercase mb-10 text-center italic tracking-widest underline decoration-gold">Bewertung</h3>
+            <div class="space-y-8 text-center">
+                <div class="flex justify-center space-x-3 text-4xl mb-8">
+                    <span class="star-item grayscale opacity-20 cursor-pointer hover:scale-125 transition-transform" onclick="window.setStarRating(1)">⭐</span>
+                    <span class="star-item grayscale opacity-20 cursor-pointer hover:scale-125 transition-transform" onclick="window.setStarRating(2)">⭐</span>
+                    <span class="star-item grayscale opacity-20 cursor-pointer hover:scale-125 transition-transform" onclick="window.setStarRating(3)">⭐</span>
+                    <span class="star-item grayscale opacity-20 cursor-pointer hover:scale-125 transition-transform" onclick="window.setStarRating(4)">⭐</span>
+                    <span class="star-item grayscale opacity-20 cursor-pointer hover:scale-125 transition-transform" onclick="window.setStarRating(5)">⭐</span>
                 </div>
-                <div class="space-y-6">
-                    <input type="text" id="revName" placeholder="Ihr Name" class="w-full p-6 rounded-[2rem] bg-slate-50 dark:bg-black border-2 border-gold font-black text-xl outline-none">
-                    <textarea id="revComment" placeholder="Ihre Nachricht..." class="w-full p-8 rounded-[2rem] bg-slate-50 dark:bg-black border-2 border-gold font-bold text-lg min-h-[150px] outline-none"></textarea>
-                </div>
-            </div>
-            <div class="p-8 border-t-2 border-gold grid grid-cols-2 gap-4 bg-gold/5">
-                <button onclick="window.submitReview()" class="w-full bg-gold text-navy py-6 rounded-full font-black uppercase text-sm shadow-xl hover:scale-105 active:scale-95 transition-all">ABSENDEN ✨</button>
-                <button onclick="window.closeReviewModal()" class="w-full bg-navy/10 dark:bg-white/10 py-6 rounded-full font-black uppercase text-sm">ABBRUCH</button>
+                <input type="text" id="revName" placeholder="Name" class="w-full p-8 rounded-[2.5rem] bg-slate-50 dark:bg-black border-2 border-gold font-black outline-none shadow-inner">
+                <textarea id="revComment" placeholder="Kommentar" class="w-full p-8 rounded-[2.5rem] bg-slate-50 dark:bg-black border-2 border-gold font-bold outline-none shadow-inner"></textarea>
+                <button onclick="window.submitReview()" class="w-full bg-gold text-navy py-8 rounded-full font-black uppercase shadow-xl tracking-[0.3em] hover:scale-105 transition-all">BEWERTUNG SENDEN</button>
             </div>
         </div>
     </div>
 
     <script>
-        const ELITE_PASS = "Kjani13675@"; 
-        window.currentTemplate = "intro";
+        const ELITE_PASS = "Kjani13675@";
+        window.tempPhoto64 = null;
         window.currentRating = 0;
+        window.currentTemplate = "vorstellung";
+
+        // Elite UI Meldungen
+        window.showKjMsg = (text, icon = "🦅") => {
+            document.getElementById('kj-msg-text').innerText = text;
+            document.getElementById('kj-msg-icon').innerText = icon;
+            document.getElementById('kj-msg-box').style.display = 'flex';
+        };
+        window.closeKjMsg = () => document.getElementById('kj-msg-box').style.display = 'none';
 
         window.toggleLighting = () => {
             const isDark = document.documentElement.classList.toggle('dark');
-            localStorage.setItem('kj_v52_glow', isDark ? 'off' : 'on');
-            updateSwitchUI(isDark);
-        };
-        function updateSwitchUI(isDark) {
-            const btn = document.getElementById('lightSwitch');
-            if (btn) btn.innerText = isDark ? '🌙' : '☀️';
-        }
-        (function initTheme() {
-            const saved = localStorage.getItem('kj_v52_glow');
-            if (saved === 'on') { document.documentElement.classList.remove('dark'); updateSwitchUI(false); } 
-            else { document.documentElement.classList.add('dark'); updateSwitchUI(true); }
-        })();
-
-        window.scrollToContact = () => {
-            const footer = document.getElementById('footer-kontakt');
-            if(footer) footer.scrollIntoView({ behavior: 'smooth' });
+            localStorage.setItem('kj_v73_glow', isDark ? 'off' : 'on');
+            if(document.getElementById('lightSwitch')) document.getElementById('lightSwitch').innerText = isDark ? '🌙' : '☀️';
         };
 
         window.showLockScreen = () => { document.getElementById('public-site').style.display='none'; document.getElementById('lock-screen').style.display='flex'; };
         window.hideLockScreen = () => { document.getElementById('lock-screen').style.display='none'; document.getElementById('public-site').style.display='block'; };
+        
         window.checkPass = () => { 
             if(document.getElementById('passInput').value === ELITE_PASS) { 
                 document.getElementById('lock-screen').style.display='none'; 
                 document.getElementById('admin-panel').style.display='block'; 
                 document.getElementById('passInput').value = ""; 
-            } else { alert("PASSWORT FALSCH."); } 
+            } else { 
+                window.showKjMsg("ZUGRIFF VERWEIGERT.", "🚫"); 
+            } 
+        };
+
+        window.backToSite = () => { 
+            document.getElementById('admin-panel').style.display='none'; 
+            document.getElementById('public-site').style.display='block'; 
+        };
+        
+        // Logout Fix v73
+        window.exitHQ = async () => { 
+            if(confirm("HQ verlassen und ausloggen?")) {
+                try {
+                    if(window.kj_signOut && window.kj_auth) {
+                        await window.kj_signOut(window.kj_auth);
+                    }
+                    location.reload(); 
+                } catch(e) { location.reload(); }
+            }
         };
 
         window.openAnfrageModal = () => document.getElementById('anfrage-modal').style.display = 'flex';
         window.closeAnfrageModal = () => document.getElementById('anfrage-modal').style.display = 'none';
+        window.openReviewModal = () => document.getElementById('review-modal').style.display = 'flex';
+        window.closeReviewModal = () => document.getElementById('review-modal').style.display = 'none';
 
-        window.submitAnfrage = async () => {
-            const n = document.getElementById('webLeadName').value;
-            const e = document.getElementById('webLeadMail').value;
-            if(!n || !e) return alert("BITTE DATEN EINGEBEN.");
-            try {
-                await window.kj_fs.addDoc(window.kj_fs.collection(window.kj_db, 'artifacts', window.kj_appId, 'public', 'data', 'web_leads'), {
-                    name: n, email: e, status: 'new', timestamp: Date.now(), lastContact: Date.now()
-                });
-                alert("ANFRAGE GESENDET! Kjani Zharki wird Sie kontaktieren.");
-                window.closeAnfrageModal();
-            } catch (e) { alert("Sende-Fehler."); }
+        window.handlePhoto = (input) => {
+            const file = input.files[0];
+            if(!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                window.tempPhoto64 = e.target.result;
+                document.getElementById('photoPrev').src = e.target.result;
+                document.getElementById('photoPrevContainer').classList.remove('hidden');
+                document.getElementById('photoLabel').innerText = "FOTO BEREIT ✅";
+            };
+            reader.readAsDataURL(file);
         };
 
-        window.renderLeads = (leads) => {
+        window.submitWebInquiry = async () => {
+            const btn = document.getElementById('web-submit-btn');
+            const n = document.getElementById('webName').value;
+            const e = document.getElementById('webMail').value;
+            const m = document.getElementById('webMessage').value;
+            
+            if(!n || !e) return window.showKjMsg("NAME & EMAIL FEHLEN.", "⚠️");
+            
+            btn.classList.add('btn-loading');
+            try {
+                if (!window.kj_ready || !window.kj_auth.currentUser) await window.kj_auth.signInAnonymously();
+                const { kj_db, kj_appId, kj_fs } = window;
+                await kj_fs.addDoc(kj_fs.collection(kj_db, 'artifacts', kj_appId, 'public', 'data', 'web_leads'), {
+                    name: n, email: e, message: m, image: window.tempPhoto64, status: 'new', timestamp: Date.now(), lastContact: Date.now()
+                });
+                window.showKjMsg("ERHALTEN! ICH MELDE MICH.", "✅");
+                window.closeAnfrageModal();
+                // Clear Form
+                document.getElementById('webName').value = "";
+                document.getElementById('webMail').value = "";
+                document.getElementById('webMessage').value = "";
+                window.tempPhoto64 = null;
+                document.getElementById('photoPrevContainer').classList.add('hidden');
+            } catch(err) { window.showKjMsg("SYSTEM-LÄDT...", "⌛"); }
+            btn.classList.remove('btn-loading');
+        };
+
+        window.renderReviews = (reviews) => {
+            const container = document.getElementById('reviews-container');
+            if(!container) return;
+            container.innerHTML = (reviews || []).slice(0, 3).map(r => `
+                <div class="card-elite p-10 rounded-[4rem] text-center shadow-2xl relative overflow-hidden group">
+                    <p class="text-gold mb-6 text-2xl">${'⭐'.repeat(r.rating)}</p>
+                    <p class="font-bold italic mb-6">"${r.comment}"</p>
+                    <p class="font-black uppercase text-[10px] tracking-[0.4em] opacity-40">${r.name}</p>
+                </div>
+            `).join('');
+        };
+
+        window.renderLeadsUI = (leads) => {
             const list = document.getElementById('leadsList');
-            document.getElementById('leadsCount').innerText = leads.length;
-            list.innerHTML = leads.map(l => {
+            document.getElementById('leadsCount').innerText = (leads || []).length;
+            list.innerHTML = (leads || []).map(l => {
                 let badge = "bg-gold"; let stat = "NEU";
-                if(l.source === 'website') { badge = "bg-green-500"; stat = "WEB-ANFRAGE"; }
                 if(l.status === 'intro') { badge = "bg-blue-500"; stat = "KONTAKTIERT"; }
                 if(l.status === 'followup') { badge = "bg-yellow-500"; stat = "ERINNERT"; }
                 if(l.status === 'blocked') { badge = "bg-red-500"; stat = "PAUSE (3 MON)"; }
                 return `
-                <div class="p-8 bg-black/40 rounded-[3.5rem] border-2 border-gold/10 cursor-pointer hover:border-gold transition-all group ${l.status === 'blocked' ? 'opacity-50 cursor-not-allowed' : ''}" 
-                     onclick="${l.status === 'blocked' ? '' : `window.loadLead('${l.id}', '${l.source}')`}">
-                    <div class="flex justify-between mb-3">
-                        <span class="text-[9px] font-black ${badge} text-navy px-3 py-1 rounded-full uppercase">${stat}</span>
-                        <p class="text-[9px] opacity-30">${new Date(l.timestamp).toLocaleDateString()}</p>
-                    </div>
-                    <p class="font-black text-2xl text-white uppercase tracking-tighter">${l.name}</p>
-                    <p class="text-[10px] opacity-40 break-all pt-2">${l.email}</p>
-                    <button onclick="event.stopPropagation(); window.deleteLead('${l.id}', '${l.source}')" class="text-[9px] text-red-500 font-black opacity-0 group-hover:opacity-100 uppercase mt-4 block w-full text-center border-t border-red-500/10 pt-3">Löschen</button>
+                <div class="p-8 bg-black/40 rounded-[3.5rem] border-2 border-gold/10 cursor-pointer hover:border-gold shadow-lg group" onclick="window.loadLead('${l.id}')">
+                    <span class="text-[8px] font-black ${badge} text-navy px-3 py-1 rounded-full uppercase italic">${stat}</span>
+                    <p class="font-black text-2xl uppercase tracking-tighter text-white truncate mt-2">${l.name}</p>
+                    <button onclick="event.stopPropagation(); window.deleteLead('${l.id}', '${l.source}')" class="text-[8px] text-red-500 font-black mt-4 block w-full text-center italic opacity-0 group-hover:opacity-100">Löschen</button>
                 </div>`;
             }).join('');
         };
 
-        window.loadLead = (id, source) => {
-            const l = window.rawLeads.find(x => x.id === id);
+        window.loadLead = (id) => {
+            const leads = [...(window.manualLeads || []), ...(window.webLeads || [])];
+            const l = leads.find(x => x.id === id);
             if(!l) return;
             document.getElementById('custName').value = l.name;
             document.getElementById('custMail').value = l.email;
-            window.currentLeadId = id; window.currentLeadSource = source;
-            if(l.status === 'intro' || l.status === 'new') window.switchTemplate('followup');
-            else window.switchTemplate('intro');
-            
-            const btn = document.getElementById('send-btn');
-            const msg = document.getElementById('mail-status-msg');
-            if(l.status === 'blocked') {
-                btn.disabled = true; btn.className = "mt-8 bg-gray-700 text-gray-500 py-8 rounded-full font-black uppercase tracking-widest text-xl cursor-not-allowed";
-                msg.innerText = "Kunde ist in der 3-monatigen Sperre."; msg.classList.remove('hidden');
-            } else {
-                btn.disabled = false; btn.className = "mt-8 bg-gold text-navy py-8 rounded-full font-black uppercase tracking-widest shadow-2xl hover:scale-105 transition-all text-xl";
-                msg.classList.add('hidden');
-            }
+            document.getElementById('lead-details').classList.remove('hidden');
+            document.getElementById('leadDescText').innerText = l.message || "Keine Nachricht vorhanden.";
+            const img = document.getElementById('leadDescImg');
+            if(l.image) { img.src = l.image; img.classList.remove('hidden'); } else { img.classList.add('hidden'); }
+            window.currentLeadId = id; window.currentLeadSource = l.source;
+            window.updateDraft();
         };
 
         window.updateDraft = () => {
             const n = document.getElementById('custName').value || "[Name]";
-            const draftArea = document.getElementById('mailDraft');
-            const signatur = `\n\n--------------------------------------------------\n🦅 KJANIS CLEANING HANNOVER\nElite Service | Reinheit & Sicherheit\n\nWeb: www.elite-reinigung-hannover.de\nMobil: +49 152 15787871\nE-Mail: info@elite-reinigung-hannover.de\n--------------------------------------------------\nZertifiziert nach § 34a GewO\nSteuer-Nr: 25/150/05335\nVersicherung: 0101-601.856.342\nAdresse: Weizenfeldstraße 1, 30419 Hannover`;
-            
-            if(window.currentTemplate === "intro") {
-                draftArea.value = `Sehr geehrte(r) ${n},\n\nmein Name ist Kjani Zharki und ich bin Inhaber von KJANIS CLEANING in Hannover. Wir unterstützen Firmen bei der professionellen Büroreinigung sowie Senioren bei Alltags-Erledigungen.\n\nAls zertifizierter Profi mit Erfahrung bei der DB Sicherheit garantiere ich Ihnen absolute Diskretion und Zuverlässigkeit.\n\nGerne würde ich mich Ihnen persönlich vorstellen.\n\nMit freundlichen Grüßen,\nKjani Zharki${signatur}`;
+            const draft = document.getElementById('mailDraft');
+            const signatur = `\n\n--------------------------------------------------\n🦅 KJANIS CLEANING HANNOVER\nElite Service | Reinheit & Sicherheit\n\nWeb: https://elite-reinigung-hannover.de\nMobil: +49 152 15787871\n--------------------------------------------------\nZertifiziert nach § 34a GewO\nSteuer-Nr: 25/150/05335\nBetriebshaftpflicht: 0101-601.856.342`;
+            if(window.currentTemplate === "vorstellung") {
+                draft.value = `Sehr geehrte Damen und Herren,\n\nmein Name ist Kjani Zharki. Ich biete in Hannover exklusive Reinigungs-Services sowie qualifizierte Senioren-Alltagshilfe an. Gerne würde ich Ihnen zeigen, wie ich für Glanz und Entlastung sorgen kann.\n\nHaben Sie Interesse an einem unverbindlichen Kennenlernen?\n\nMit freundlichen Grüßen,\nKjani Zharki${signatur}`;
+            } else if(window.currentTemplate === "angebot") {
+                draft.value = `Sehr geehrte(r) ${n},\n\nvielen Dank für Ihre Anfrage! Ich helfe Ihnen gerne weiter. Gerne können wir einen Termin vereinbaren, um alles Weitere zu besprechen.\n\nMit freundlichen Grüßen,\nKjani Zharki${signatur}`;
             } else {
-                draftArea.value = `Guten Tag ${n},\n\nich wollte mich kurz nach Ihrer Anfrage erkundigen? Haben Sie meine Nachricht zur Elite-Reinigung und Senioren-Alltagshilfe erhalten?\n\nÜber eine kurze Rückmeldung würde ich mich sehr freuen.\n\nBeste Grüße,\nKjani Zharki${signatur}`;
+                draft.value = `Guten Tag ${n},\n\nich wollte kurz nachfragen, ob Sie meine Nachricht erhalten haben? Ich stehe Ihnen für Rückfragen jederzeit zur Verfügung.\n\nBeste Grüße,\nKjani Zharki${signatur}`;
             }
         };
 
+        // Mail Send Fix v73 (Titan Resilience)
         window.sendEliteMail = async () => {
             const e = document.getElementById('custMail').value;
             const b = document.getElementById('mailDraft').value;
-            const n = document.getElementById('custName').value;
-            if(!e || !n) return alert("Daten unvollständig.");
-            const exists = window.rawLeads?.find(l => l.email === e);
-            const uid = window.kj_auth.currentUser.uid;
+            if(!e) return window.showKjMsg("EMAIL FEHLT.", "⚠️");
+            
+            // SCHRITT 1: Mail sofort öffnen (Priorität)
+            const mailUrl = `mailto:${e}?subject=Elite Service: Kjanis Cleaning&body=${encodeURIComponent(b)}`;
+            window.location.href = mailUrl;
+
+            // SCHRITT 2: Formular leeren & Details ausblenden
+            document.getElementById('custName').value = "";
+            document.getElementById('custMail').value = "";
+            document.getElementById('mailDraft').value = "";
+            document.getElementById('lead-details').classList.add('hidden');
+
+            // SCHRITT 3: DB Update leise im Hintergrund
             try {
-                if(!exists) {
-                    await window.kj_fs.addDoc(window.kj_fs.collection(window.kj_db, 'artifacts', window.kj_appId, 'users', uid, 'leads'), {
-                        name: n, email: e, status: 'intro', timestamp: Date.now(), lastContact: Date.now()
-                    });
-                } else {
-                    let nextStatus = 'intro';
-                    if(exists.status === 'intro' || exists.status === 'new') nextStatus = 'followup';
-                    else if(exists.status === 'followup') nextStatus = 'blocked';
+                const leads = [...(window.manualLeads || []), ...(window.webLeads || [])];
+                const l = leads.find(x => x.id === window.currentLeadId);
+                if(l && window.kj_ready) {
+                    let nextStat = 'intro';
+                    if(l.status === 'intro') nextStat = 'followup';
+                    else if(l.status === 'followup') nextStat = 'blocked';
                     
-                    const path = exists.source === 'manual' ? 
-                        ['artifacts', window.kj_appId, 'users', uid, 'leads', exists.id] :
-                        ['artifacts', window.kj_appId, 'public', 'data', 'web_leads', exists.id];
-                        
-                    await window.kj_fs.updateDoc(window.kj_fs.doc(window.kj_db, ...path), {
-                        status: nextStatus, lastContact: Date.now()
-                    });
+                    const { kj_db, kj_appId, kj_fs, kj_auth } = window;
+                    const path = window.currentLeadSource === 'manual' ? ['artifacts', kj_appId, 'users', kj_auth.currentUser.uid, 'leads', window.currentLeadId] : ['artifacts', kj_appId, 'public', 'data', 'web_leads', window.currentLeadId];
+                    await kj_fs.updateDoc(kj_fs.doc(kj_db, ...path), { status: nextStat, lastContact: Date.now() });
                 }
-                window.location.href = `mailto:${e}?subject=Kjanis Cleaning Hannover&body=${encodeURIComponent(b)}`;
-            } catch (err) { alert("Sende-Fehler."); }
+            } catch(err) { console.log("Silent DB Refresh..."); }
+        };
+
+        window.switchTemplate = (t) => {
+            window.currentTemplate = t;
+            ['vorstellung', 'angebot', 'followup'].forEach(id => {
+                const btn = document.getElementById('btn-' + id);
+                if(!btn) return;
+                if(id === t) btn.className = "px-6 py-3 rounded-full text-[9px] font-black uppercase bg-gold text-navy shadow-lg";
+                else btn.className = "px-6 py-3 rounded-full text-[9px] font-black uppercase text-gold";
+            });
+            window.updateDraft();
         };
 
         window.deleteLead = async (id, source) => { 
-            if(!confirm("Eintrag sicher löschen?")) return;
-            const path = source === 'manual' ? 
-                ['artifacts', window.kj_appId, 'users', window.kj_auth.currentUser.uid, 'leads', id] :
-                ['artifacts', window.kj_appId, 'public', 'data', 'web_leads', id];
-            await window.kj_fs.deleteDoc(window.kj_fs.doc(window.kj_db, ...path)); 
+            if(!confirm("Diesen Lead endgültig löschen?")) return;
+            const { kj_db, kj_appId, kj_fs, kj_auth } = window;
+            const path = source === 'manual' ? ['artifacts', kj_appId, 'users', kj_auth.currentUser.uid, 'leads', id] : ['artifacts', kj_appId, 'public', 'data', 'web_leads', id];
+            await kj_fs.deleteDoc(kj_fs.doc(kj_db, ...path)); 
         };
 
-        window.backToSite = () => { document.getElementById('admin-panel').style.display='none'; document.getElementById('public-site').style.display='block'; };
-        window.exitHQ = () => { if(confirm("HQ verlassen?")) location.reload(); };
-        window.toggleFinance = () => { const m = document.getElementById('main-radar'); const f = document.getElementById('finance-view'); if(f.style.display === 'block') { f.style.display = 'none'; m.style.display = 'grid'; } else { m.style.display = 'none'; f.style.display = 'block'; window.generateFinanceReport(); } };
-        window.generateFinanceReport = () => { const leads = window.rawLeads || []; const r = document.getElementById('finance-report'); let text = `FINANZ-LOG KJANIS CLEANING\nADRESSE: Weizenfeldstraße 1, 30419 Hannover\n\nERFASSTE AKTIVITÄTEN:\n--------------------------------------------------\n`; leads.forEach((l, i) => { text += `${i+1}. ${new Date(l.timestamp).toLocaleDateString()} | STATUS: ${l.status.toUpperCase()} | KUNDE: ${l.name} | MAIL: ${l.email}\n`; }); r.innerText = text; };
-        window.exportFinanceData = () => { const text = document.getElementById('finance-report').innerText; const blob = new Blob([text], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `Steuerbericht_Kjani.txt`; a.click(); };
         window.extSearch = (q) => window.open(`https://www.google.com/search?q=${encodeURIComponent(q)}`, '_blank');
-        window.switchTemplate = (t) => { window.currentTemplate = t; document.getElementById('btn-intro').className = t==='intro'?'px-6 py-2 rounded-full text-[10px] font-black uppercase bg-gold text-navy':'px-6 py-2 rounded-full text-[10px] font-black uppercase text-gold'; document.getElementById('btn-followup').className = t==='followup'?'px-6 py-2 rounded-full text-[10px] font-black uppercase bg-gold text-navy':'px-6 py-2 rounded-full text-[10px] font-black uppercase text-gold'; window.updateDraft(); };
-        window.openReviewModal = () => document.getElementById('review-modal').style.display = 'flex';
-        window.closeReviewModal = () => document.getElementById('review-modal').style.display = 'none';
         window.setStarRating = (r) => { window.currentRating = r; document.querySelectorAll('.star-item').forEach((s, i) => { if(i < r) s.classList.remove('grayscale', 'opacity-20'); else s.classList.add('grayscale', 'opacity-20'); }); };
-        window.submitReview = async () => { const n = document.getElementById('revName').value; const c = document.getElementById('revComment').value; if(!n || !c || !window.currentRating) return alert("BITTE STERNE WÄHLEN."); try { await window.kj_fs.addDoc(window.kj_fs.collection(window.kj_db, 'artifacts', window.kj_appId, 'public', 'data', 'reviews'), { name: n, comment: c, rating: window.currentRating, timestamp: Date.now() }); alert("VIELEN DANK!"); window.closeReviewModal(); } catch (e) { alert("Datenbank-Fehler!"); } };
+        
+        window.submitReview = async () => {
+            if (!window.kj_ready) return window.showKjMsg("SYSTEM-START...", "⌛");
+            const n = document.getElementById('revName').value; const c = document.getElementById('revComment').value; if(!n || !c || !window.currentRating) return window.showKjMsg("STERNE!", "⚠️"); 
+            try { 
+                await window.kj_fs.addDoc(window.kj_fs.collection(window.kj_db, 'artifacts', window.kj_appId, 'public', 'data', 'reviews'), { name: n, comment: c, rating: window.currentRating, timestamp: Date.now() }); 
+                window.showKjMsg("DANKE!", "⭐"); window.closeReviewModal(); 
+            } catch (e) { window.showKjMsg("SYSTEM-LÄDT...", "⌛"); } 
+        };
+        window.openFullImage = (src) => window.open(src, '_blank');
         window.updateDraft();
     </script>
 </body>
