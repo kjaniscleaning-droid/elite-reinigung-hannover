@@ -78,6 +78,15 @@ input,select,textarea { color-scheme:only light }
  .float { padding:9px 12px }
  .footer-content { gap:21px }
 }
+</style><style id="kjani-webview-dark-optout">
+/* Declare intentional color handling for Android WebView algorithmic darkening. */
+@media (prefers-color-scheme: dark) {
+  :root,html,body { color-scheme: only light !important; }
+  html,body { background-color:#f8fbff !important; }
+  .header { background-color:#fff !important; }
+  .service-card,.step,.faq details,.form-card { background-color:#fff !important; color:#183451 !important; }
+  .hero { background:linear-gradient(118deg,#f5fbff 5%,#eaf5ff 54%,#d2eaff 100%) !important; }
+}
 </style></head><body>
 <a class="skip" href="#hauptinhalt">Zum Inhalt springen</a>
 <div class="topbar"><div class="container"><span>📍 Hannover &amp; Umgebung · Persönlicher Reinigungsservice</span><span>✉️ kjaniscleaning@gmail.com</span></div></div>
